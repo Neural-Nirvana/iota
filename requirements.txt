@@ -1,0 +1,15 @@
+Flask==2.3.3
+Flask-SocketIO==5.3.6
+pyserial==3.5
+psutil==5.9.5
+python-socketio==5.8.0
+eventlet==0.33.3
+
+# Optional dependencies for AI integration
+# openai>=1.0.0
+# transformers>=4.30.0
+# torch>=2.0.0
+
+# For standalone packaging (install when ready to package)
+# pyinstaller>=5.10.0
+# auto-py-to-exe>=2.30.0
