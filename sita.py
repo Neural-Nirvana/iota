@@ -17,6 +17,7 @@ from agno.utils.log import logger
 from agno.tools.shell import ShellTools
 from agno.storage.sqlite import SqliteStorage
 import platform
+from agno.tools.file import FileTools
 
 system_information = [platform.uname(), platform.system(), platform.release(), platform.version(), platform.machine(), platform.processor()]
 
@@ -558,7 +559,7 @@ def main():
 
         reasoning_agent = Agent(
             model=model_instance,
-            tools=[ReasoningTools(add_instructions=True), ShellTools()],
+            tools=[ReasoningTools(add_instructions=True), ShellTools(), FileTools()],
             instructions=dedent("""\
                 system_information = {system_information}
                 You are an expert System Intelligence Teminal Assistant with strong analytical, system administration, and IoT skills! 🧠
