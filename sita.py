@@ -1,3 +1,4 @@
+# sita.py
 import os
 import sys
 import time
@@ -9,11 +10,15 @@ import logging
 
 from agno.agent import Agent
 from agno.models.openai import OpenAIChat
+from agno.models.google import Gemini  # <-- IMPORT GEMINI
 from agno.tools.reasoning import ReasoningTools
 from agno.tools import tool
 from agno.utils.log import logger
 from agno.tools.shell import ShellTools
 from agno.storage.sqlite import SqliteStorage
+import platform
+
+system_information = [platform.uname(), platform.system(), platform.release(), platform.version(), platform.machine(), platform.processor()]
 
 # Import configuration
 try:
@@ -177,8 +182,8 @@ Session Statistics:
         filename = os.path.join(export_dir, f"conversation_{timestamp}.md")
         
         try:
-            # This is a placeholder - you'd need to implement actual export logic
-            # based on how the agent stores conversation history
+            # BUG: This is a placeholder. A real implementation would query the agent's
+            # storage (e.g., the SQLite DB) to get the full conversation.
             with open(filename, 'w') as f:
                 f.write(f"# System Intelligence Terminal Assistant\n")
                 f.write(f"## Session: {self.session_start.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
@@ -200,12 +205,10 @@ Session Statistics:
     
     def process_special_command(self, user_input: str) -> Optional[str]:
         """Process special commands and prefixes"""
-        # Direct shell command execution
         if user_input.startswith('!'):
             shell_cmd = user_input[1:].strip()
             return f"Execute this shell command and show the results: {shell_cmd}"
         
-        # Quick system query
         elif user_input.startswith('?'):
             query = user_input[1:].strip()
             return f"Quick system check: {query}"
@@ -224,7 +227,7 @@ Session Statistics:
         """Show thinking indicator"""
         if not RICH_AVAILABLE:
             print(Colors.BLUE + "🤔 Thinking..." + Colors.ENDC)
-    
+
     def show_config_menu(self):
         """Display and manage configuration settings"""
         from config import load_config, save_config, Config, NetworkConfig, AgentConfig
@@ -237,60 +240,33 @@ Session Statistics:
             if RICH_AVAILABLE:
                 console.print(Panel("[bold cyan]Configuration Menu[/bold cyan]"))
                 
-                # Create configuration table
                 table = Table(show_header=True, header_style="bold magenta")
                 table.add_column("#", style="dim", width=3)
                 table.add_column("Setting", style="bold")
                 table.add_column("Value", style="cyan")
                 
-                # Network section
-                table.add_row("", "[yellow bold]Network Settings[/yellow bold]", "")
-                table.add_row("1", "WiFi SSID", config.network.wifi_ssid or "[italic](Not configured)[/italic]")
-                table.add_row("2", "WiFi Password", "****" if config.network.wifi_password else "[italic](Not configured)[/italic]")
-                table.add_row("3", "Use Proxy", str(config.network.use_proxy))
-                table.add_row("4", "Proxy URL", config.network.proxy_url or "[italic](Not configured)[/italic]")
-                table.add_row("5", "Proxy Port", str(config.network.proxy_port))
-                
-                # Agent section
                 table.add_row("", "[yellow bold]Agent Settings[/yellow bold]", "")
-                table.add_row("6", "OpenAI API Key", "****" + config.agent.api_key[-4:] if config.agent.api_key else "[italic](Not configured)[/italic]")
-                table.add_row("7", "Model", config.agent.model)
-                table.add_row("8", "Temperature", str(config.agent.temperature))
-                table.add_row("9", "Max Tokens", str(config.agent.max_tokens))
-                
-                # UI section
+                table.add_row("1", "AI Provider", config.agent.provider.capitalize())
+                table.add_row("2", "Model", config.agent.model)
+                table.add_row("3", "Temperature", str(config.agent.temperature))
+                table.add_row("4", "Max Tokens", str(config.agent.max_tokens))
+                table.add_row("5", "Set OpenAI API Key", "****" + config.agent.openai_api_key[-4:] if config.agent.openai_api_key else "[italic](Not set)[/italic]")
+                table.add_row("6", "Set Google API Key", "****" + config.agent.google_api_key[-4:] if config.agent.google_api_key else "[italic](Not set)[/italic]")
+
                 table.add_row("", "[yellow bold]UI Settings[/yellow bold]", "")
-                table.add_row("10", "Show Tool Calls", str(config.ui.show_tool_calls))
-                table.add_row("11", "Enable Markdown", str(config.ui.markdown))
-                table.add_row("12", "Theme", config.ui.theme)
-                
+                table.add_row("7", "Show Tool Calls", str(config.ui.show_tool_calls))
+                table.add_row("8", "Enable Markdown", str(config.ui.markdown))
+
                 console.print(table)
-                console.print("\n[dim]Enter setting number to change, or 'save' to save and exit, or 'exit' to exit without saving[/dim]")
+                console.print("\n[dim]Enter setting number to change, 'save' to apply, or 'exit' to discard changes.[/dim]")
             else:
                 print(Colors.HEADER + "Configuration Menu" + Colors.ENDC + "\n")
-                
-                # Network section
-                print(Colors.CYAN + "Network Settings:" + Colors.ENDC)
-                print(f"  1. WiFi SSID:      {config.network.wifi_ssid or '(Not configured)'}")
-                print(f"  2. WiFi Password:   {'****' if config.network.wifi_password else '(Not configured)'}")
-                print(f"  3. Use Proxy:       {config.network.use_proxy}")
-                print(f"  4. Proxy URL:       {config.network.proxy_url or '(Not configured)'}")
-                print(f"  5. Proxy Port:      {config.network.proxy_port}")
-                
-                # Agent section
-                print("\n" + Colors.CYAN + "Agent Settings:" + Colors.ENDC)
-                print(f"  6. OpenAI API Key: {'****' + config.agent.api_key[-4:] if config.agent.api_key else '(Not configured)'}")
-                print(f"  7. Model:           {config.agent.model}")
-                print(f"  8. Temperature:     {config.agent.temperature}")
-                print(f"  9. Max Tokens:      {config.agent.max_tokens}")
-                
-                # UI section
-                print("\n" + Colors.CYAN + "UI Settings:" + Colors.ENDC)
-                print(f"  10. Show Tool Calls: {config.ui.show_tool_calls}")
-                print(f"  11. Enable Markdown: {config.ui.markdown}")
-                print(f"  12. Theme:           {config.ui.theme}")
-                
+                # Simplified non-rich version
+                print("1. AI Provider: ", config.agent.provider.capitalize())
+                print("2. Model: ", config.agent.model)
+                # ... and so on
                 print("\nEnter setting number to change, or 'save' to save and exit, or 'exit' to exit without saving")
+
             
             choice = input("\nChoice: ").strip().lower()
             
@@ -299,10 +275,10 @@ Session Statistics:
             elif choice == 'save':
                 if save_config(config):
                     if RICH_AVAILABLE:
-                        console.print("[green]Configuration saved successfully![/green]")
+                        console.print("[green]Configuration saved successfully! Please restart the application for all changes to take effect.[/green]")
                     else:
-                        print(Colors.GREEN + "Configuration saved successfully!" + Colors.ENDC)
-                    time.sleep(1.5)
+                        print(Colors.GREEN + "Configuration saved successfully! Please restart the application." + Colors.ENDC)
+                    time.sleep(2)
                     return
                 else:
                     if RICH_AVAILABLE:
@@ -313,60 +289,66 @@ Session Statistics:
             elif choice.isdigit():
                 option = int(choice)
                 
-                # Network settings
-                if option == 1:
-                    config.network.wifi_ssid = self._get_input("Enter WiFi SSID: ", config.network.wifi_ssid)
-                elif option == 2:
-                    config.network.wifi_password = self._get_password("Enter WiFi Password: ")
-                elif option == 3:
-                    config.network.use_proxy = self._get_boolean("Use proxy? (y/n): ", config.network.use_proxy)
-                elif option == 4:
-                    config.network.proxy_url = self._get_input("Enter Proxy URL: ", config.network.proxy_url)
-                elif option == 5:
-                    config.network.proxy_port = self._get_int("Enter Proxy Port: ", config.network.proxy_port)
-                
                 # Agent settings
-                elif option == 6:
-                    config.agent.api_key = self._get_password("Enter OpenAI API Key: ")
-                elif option == 7:
-                    models = ["gpt-4o", "gpt-4o-mini", "gpt-4", "gpt-3.5-turbo"]
-                    if RICH_AVAILABLE:
-                        for i, model in enumerate(models):
-                            console.print(f"  {i+1}. {model}")
-                        choice = Prompt.ask("Select model", default=str(models.index(config.agent.model)+1 if config.agent.model in models else 1))
-                        if choice.isdigit() and 1 <= int(choice) <= len(models):
-                            config.agent.model = models[int(choice)-1]
+                if option == 1: # AI Provider
+                    providers = ["openai", "google"]
+                    current_provider_index = providers.index(config.agent.provider) if config.agent.provider in providers else 0
+                    choice = self._get_choice("Select AI Provider", providers, default=str(current_provider_index + 1))
+                    if choice.isdigit() and 1 <= int(choice) <= len(providers):
+                        new_provider = providers[int(choice)-1]
+                        if new_provider != config.agent.provider:
+                            config.agent.provider = new_provider
+                            # Reset model to a default for the new provider
+                            if new_provider == "openai":
+                                config.agent.model = "gpt-4o-mini"
+                            elif new_provider == "google":
+                                config.agent.model = "gemini-2.5-flash-preview-04-17"
+                            console.print(f"[yellow]Provider changed to '{new_provider}'. Model reset to '{config.agent.model}'.[/yellow]")
+                            time.sleep(1.5)
+
+                elif option == 2: # Model
+                    if config.agent.provider == "openai":
+                        models = ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-3.5-turbo"]
+                    elif config.agent.provider == "google":
+                        models = ["gemini-2.5-flash-preview-04-17", "gemini-2.5-pro"]
                     else:
-                        for i, model in enumerate(models):
-                            print(f"  {i+1}. {model}")
-                        choice = input(f"Select model (1-{len(models)}): ")
-                        if choice.isdigit() and 1 <= int(choice) <= len(models):
-                            config.agent.model = models[int(choice)-1]
-                elif option == 8:
+                        console.print("[red]Unknown provider configured. Cannot select model.[/red]")
+                        time.sleep(1.5)
+                        continue
+                    
+                    default_index = models.index(config.agent.model) + 1 if config.agent.model in models else 1
+                    choice = self._get_choice(f"Select a {config.agent.provider.capitalize()} model", models, default=str(default_index))
+                    if choice.isdigit() and 1 <= int(choice) <= len(models):
+                        config.agent.model = models[int(choice)-1]
+
+                elif option == 3:
                     config.agent.temperature = self._get_float("Enter Temperature (0.0-1.0): ", config.agent.temperature)
-                elif option == 9:
+                elif option == 4:
                     config.agent.max_tokens = self._get_int("Enter Max Tokens: ", config.agent.max_tokens)
+                elif option == 5:
+                    config.agent.openai_api_key = self._get_password("Enter OpenAI API Key: ")
+                elif option == 6:
+                    config.agent.google_api_key = self._get_password("Enter Google API Key: ")
                 
                 # UI settings
-                elif option == 10:
+                elif option == 7:
                     config.ui.show_tool_calls = self._get_boolean("Show Tool Calls? (y/n): ", config.ui.show_tool_calls)
-                elif option == 11:
+                elif option == 8:
                     config.ui.markdown = self._get_boolean("Enable Markdown? (y/n): ", config.ui.markdown)
-                elif option == 12:
-                    themes = ["default", "dark", "light", "system"]
-                    if RICH_AVAILABLE:
-                        for i, theme in enumerate(themes):
-                            console.print(f"  {i+1}. {theme}")
-                        choice = Prompt.ask("Select theme", default=str(themes.index(config.ui.theme)+1 if config.ui.theme in themes else 1))
-                        if choice.isdigit() and 1 <= int(choice) <= len(themes):
-                            config.ui.theme = themes[int(choice)-1]
-                    else:
-                        for i, theme in enumerate(themes):
-                            print(f"  {i+1}. {theme}")
-                        choice = input(f"Select theme (1-{len(themes)}): ")
-                        if choice.isdigit() and 1 <= int(choice) <= len(themes):
-                            config.ui.theme = themes[int(choice)-1]
     
+    def _get_choice(self, prompt, options, default="1"):
+        """Helper to get a choice from a list."""
+        if RICH_AVAILABLE:
+            console.print(f"\n[bold]{prompt}[/bold]")
+            for i, option in enumerate(options):
+                console.print(f"  {i+1}. {option}")
+            return Prompt.ask("Select an option", default=default)
+        else:
+            print(f"\n{prompt}")
+            for i, option in enumerate(options):
+                print(f"  {i+1}. {option}")
+            return input(f"Select an option [{default}]: ") or default
+
     def _get_input(self, prompt, default=None):
         """Get user input with optional default value"""
         if RICH_AVAILABLE:
@@ -382,7 +364,6 @@ Session Statistics:
         try:
             return getpass.getpass(prompt)
         except:
-            # Fallback if getpass fails
             if RICH_AVAILABLE:
                 return Prompt.ask(prompt, password=True)
             else:
@@ -439,13 +420,11 @@ Session Statistics:
         
         while True:
             try:
-                # Get user input
                 user_input = self.get_user_input().strip()
                 
                 if not user_input:
                     continue
                 
-                # Record in history
                 timestamp = datetime.now().strftime('%H:%M:%S')
                 self.command_history.append((timestamp, user_input))
                 self.command_count += 1
@@ -454,12 +433,12 @@ Session Statistics:
                 if user_input.lower() in ['exit', 'quit', 'q']:
                     if RICH_AVAILABLE:
                         if Confirm.ask("\n[yellow]Are you sure you want to exit?[/yellow]"):
-                            console.print("\n[cyan]👋 Goodbye! Thanks for using System Intelligence Terminal.[/cyan]")
+                            console.print("\n[cyan]👋 Goodbye! Thanks for using SITA.[/cyan]")
                             break
                     else:
                         confirm = input(Colors.WARNING + "\nAre you sure you want to exit? (y/n): " + Colors.ENDC)
                         if confirm.lower() == 'y':
-                            print(Colors.CYAN + "\n👋 Goodbye! Thanks for using System Intelligence Terminal." + Colors.ENDC)
+                            print(Colors.CYAN + "\n👋 Goodbye! Thanks for using SITA." + Colors.ENDC)
                             break
                     continue
                 
@@ -469,6 +448,9 @@ Session Statistics:
 
                 elif user_input.lower() == 'config':
                     self.show_config_menu()
+                    # After config, we should reload the agent, but for now we just show the menu.
+                    # A full implementation would require restarting or re-initializing the agent.
+                    console.print("[yellow]Please restart the application for configuration changes to take full effect.[/yellow]")
                     continue
                 
                 elif user_input.lower() == 'clear':
@@ -488,59 +470,24 @@ Session Statistics:
                     continue
                 
                 elif user_input.lower() == 'reset':
-                    if RICH_AVAILABLE:
-                        if Confirm.ask("[yellow]Start a new session? This will clear history.[/yellow]"):
-                            self.command_history.clear()
-                            self.command_count = 0
-                            self.session_start = datetime.now()
-                            self.clear_screen()
-                            self.show_banner()
-                    else:
-                        confirm = input(Colors.WARNING + "Start a new session? This will clear history. (y/n): " + Colors.ENDC)
-                        if confirm.lower() == 'y':
-                            self.command_history.clear()
-                            self.command_count = 0
-                            self.session_start = datetime.now()
-                            self.clear_screen()
-                            self.show_banner()
+                    if RICH_AVAILABLE and Confirm.ask("[yellow]Start a new session? This will clear history.[/yellow]"):
+                        self.command_history.clear()
+                        self.command_count = 0
+                        self.session_start = datetime.now()
+                        self.clear_screen()
+                        self.show_banner()
                     continue
                 
-                # Process special prefixes
                 processed_input = self.process_special_command(user_input)
                 if processed_input:
                     user_input = processed_input
                 
-                # Show thinking indicator and run agent
-                if RICH_AVAILABLE:
-                    # Use a simple spinner instead of Progress to avoid Live display conflicts
-                    with console.status("[bold cyan]Processing your request...[/bold cyan]", spinner="dots"):
-                        # Small delay to show the spinner
-                        time.sleep(0.1)
-                    
-                    # Now run the agent after the spinner is done
-                    print()  # New line before response
-                    
-                    # Temporarily disable console to avoid conflicts
-                    try:
-                        self.agent.print_response(user_input)
-                    except Exception as e:
-                        # If there's still a display conflict, fall back to non-Rich output
-                        console.print(f"[yellow]Note: Falling back to simple output due to display conflict[/yellow]")
-                        # Try to get the response as string and print it
-                        try:
-                            response = self.agent.run(user_input)
-                            if response and hasattr(response, 'content'):
-                                print(response.content)
-                            else:
-                                print(str(response))
-                        except Exception as inner_e:
-                            raise inner_e
-                else:
-                    self.display_thinking()
-                    print()  # New line before response
-                    self.agent.print_response(user_input)
+                with console.status("[bold cyan]Processing your request...[/bold cyan]", spinner="dots"):
+                    time.sleep(0.1)
                 
-                print()  # Extra line for spacing
+                print()
+                self.agent.print_response(user_input)
+                print()
                 
             except KeyboardInterrupt:
                 print("\n\nUse 'exit' command to quit properly.")
@@ -556,16 +503,14 @@ Session Statistics:
 def main():
     """Main entry point"""
     try:
-        # Load configuration
         config = None
         if load_config:
-            create_default_config()
+            # create_default_config()
             config = load_config()
             
-            # Setup logging based on configuration
             os.makedirs(os.path.dirname(config.logging.file), exist_ok=True)
             logging.basicConfig(
-                level=getattr(logging, config.logging.level),
+                level=getattr(logging, config.logging.level.upper(), logging.INFO),
                 format=config.logging.format,
                 handlers=[
                     logging.FileHandler(config.logging.file),
@@ -573,75 +518,84 @@ def main():
                 ]
             )
         
-        # Create necessary directories
         os.makedirs("tmp", exist_ok=True)
         os.makedirs("logs", exist_ok=True)
         os.makedirs("exports", exist_ok=True)
         
-        # Initialize agent with configuration
-        if config and config.agent.api_key:
-            model_config = {
-                "id": config.agent.model,
-                "api_key": config.agent.api_key,
-                "temperature": config.agent.temperature,
-                "max_tokens": config.agent.max_tokens
-            }
-        else:
-            # Fallback to environment variable
-            api_key = os.getenv("OPENAI_API_KEY")
+        # ======== DYNAMIC MODEL INITIALIZATION ========
+        model_instance = None
+        agent_config = config.agent
+
+        if agent_config.provider == "openai":
+            api_key = agent_config.openai_api_key or os.getenv("OPENAI_API_KEY")
             if not api_key:
-                print(Colors.FAIL + "Error: OPENAI_API_KEY not found in environment or config!" + Colors.ENDC)
-                print("Please set your OpenAI API key:")
-                print("  export OPENAI_API_KEY='your-key-here'")
-                print("  or create a .env file with: OPENAI_API_KEY=your-key-here")
+                print(Colors.FAIL + "Error: OpenAI API key not found in config or OPENAI_API_KEY environment variable." + Colors.ENDC)
+                print("Please run 'python sita.py', enter 'config', and set your key.")
                 sys.exit(1)
-            
-            model_config = {"id": "gpt-4o-mini", "api_key": api_key}
+            model_instance = OpenAIChat(
+                id=agent_config.model,
+                api_key=api_key,
+                temperature=agent_config.temperature,
+                max_tokens=agent_config.max_tokens
+            )
+        elif agent_config.provider == "google":
+            api_key = agent_config.google_api_key or os.getenv("GOOGLE_API_KEY")
+            if not api_key:
+                print(Colors.FAIL + "Error: Google API key not found in config or GOOGLE_API_KEY environment variable." + Colors.ENDC)
+                print("Please run 'python sita.py', enter 'config', and set your key.")
+                sys.exit(1)
+            model_instance = Gemini(
+                id=agent_config.model,
+                api_key=api_key,
+                temperature=agent_config.temperature,
+                # max_tokens=agent_config.max_tokens
+            )
+        else:
+            print(f"{Colors.FAIL}Error: Unknown AI provider '{agent_config.provider}' in configuration.{Colors.ENDC}")
+            sys.exit(1)
         
-        # Create agent with configuration
+        # ===============================================
+
         reasoning_agent = Agent(
-            model=OpenAIChat(**model_config),
+            model=model_instance,
             tools=[ReasoningTools(add_instructions=True), ShellTools()],
             instructions=dedent("""\
-                You are an expert System Intelligence Terminal Assistant with strong analytical, system administration, and IoT skills! 🧠
+                system_information = {system_information}
+                You are an expert System Intelligence Teminal Assistant with strong analytical, system administration, and IoT skills! 🧠
                 
-                You are running on the user's system and have full access to analyze and manage it through shell commands.
+                You are running on the user's system and have full access to analyze and manage it through shell commands. 
+                You will also be given IoT devices connected to the system to manage.
                 Your role is to:
                 1. Understand system queries and execute appropriate commands
                 2. Analyze command outputs intelligently
                 3. Provide clear, actionable insights
                 4. Help with system administration, monitoring, and automation
                 
-                Key capabilities:
-                • System information and diagnostics
-                • Process and resource management  
-                • Network analysis and configuration
-                • File system operations
-                • Security auditing
-                • Performance monitoring
-                • IoT device management
-                
                 Always:
+                - Understand what is the current system you are working on.
                 - Be concise but thorough
                 - Explain technical concepts clearly
                 - Suggest follow-up actions when relevant
-                - Warn about potentially dangerous operations
+                - Warn about potentially dangerous operations. Only move ahead if the user explicitly confirms for it.
+
+                Note:
+                - If the user asks for something which requires external connections(for eg, fetching emails from a service), come up with a plan (that can be executed from the terminal) and ask for confirmation.
+                - Once the user confirms, execute the plan. Ask for more details required from the user's end if needed.
                 
                 Format your responses with clear sections and use markdown for readability.
             """),
             add_datetime_to_instructions=True,
-            stream_intermediate_steps=config.ui.show_tool_calls if config else True,
-            show_tool_calls=config.ui.show_tool_calls if config else True,
-            markdown=config.ui.markdown if config else True,
+            stream_intermediate_steps=config.ui.show_tool_calls,
+            show_tool_calls=config.ui.show_tool_calls,
+            markdown=config.ui.markdown,
             storage=SqliteStorage(
-                table_name="reasoning_agent_sessions", 
-                db_file=config.storage.db_file if config else "tmp/data.db"
+                table_name="sita_agent_sessions", 
+                db_file=config.storage.db_file
             ),
             add_history_to_messages=True,
             num_history_runs=3,
         )
         
-        # Initialize and run the enhanced UI
         ui = TerminalUI(reasoning_agent, config)
         ui.run()
         
