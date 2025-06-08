@@ -1,4 +1,4 @@
-# sita.py
+# main.py
 import os
 import sys
 import time
@@ -18,8 +18,9 @@ from agno.tools.shell import ShellTools
 from agno.storage.sqlite import SqliteStorage
 import platform
 from agno.tools.file import FileTools
+from agno.tools.python import PythonTools
 
-system_information = [platform.uname(), platform.system(), platform.release(), platform.version(), platform.machine(), platform.processor()]
+system_information = platform.uname()
 
 # Import configuration
 try:
@@ -83,20 +84,35 @@ class TerminalUI:
         self.clear_screen()
         
         banner = """
-╔══════════════════════════════════════════════════════════════╗
-║                                                              ║
-║         🤖 SITA-System Intelligence Terminal Assistant🤖     ║
-║                                                              ║
-║              Expert System Analysis & Automation             ║
-║                                                              ║
-╚══════════════════════════════════════════════════════════════╝
+    ██████████████████████████████████████████████████
+    ██                                              ██
+    ██    ┌─────┐  ████████ ██  ██ ████████         ██
+    ██    │ ◉ ◉ │    ██     ██  ██ ██               ██
+    ██    │  >  │    ██     ██████ ████             ██
+    ██    └─────┘    ██     ██  ██ ██               ██
+    ██               ██     ██  ██ ████████         ██
+    ██                                              ██
+    ██      █████╗ ██╗       ██████╗ ███████╗       ██
+    ██     ██╔══██╗██║      ██╔═══██╗██╔════╝       ██
+    ██     ███████║██║      ██║   ██║███████╗       ██
+    ██     ██╔══██║██║      ██║   ██║╚════██║       ██
+    ██     ██║  ██║██║      ╚██████╔╝███████║       ██
+    ██     ╚═╝  ╚═╝╚═╝       ╚═════╝ ╚══════╝       ██
+    ██                                              ██
+    ██    ╔═══════════════════════════════════════╗ ██
+    ██    ║ For Tinkerers and Builders            ║ ██
+    ██    ╚═══════════════════════════════════════╝ ██
+    ██                                              ██
+    ██████████████████████████████████████████████████
         """
         
         if RICH_AVAILABLE:
             console.print(Panel(banner, style="bold cyan"))
+            console.print(platform.machine()+', '+ platform.processor()+', '+ platform.release()+', '+ platform.version())
             console.print("[dim]Type 'help' for commands, 'exit' to quit[/dim]\n")
         else:
             print(Colors.CYAN + banner + Colors.ENDC)
+            print(platform.uname())
             print(Colors.BLUE + "Type 'help' for commands, 'exit' to quit\n" + Colors.ENDC)
     
     def show_help(self):
@@ -418,6 +434,26 @@ Session Statistics:
     def run(self):
         """Main run loop with enhanced UI"""
         self.show_banner()
+        exit_banner = """
+        
+    ████████████████████████████████████████████████████████
+    █                                                      █
+    █     ┌─────┐    ╔══════════════════════════════════╗  █
+    █     │ ◉ ◉ │    ║                                  ║  █
+    █     │  ∩  │ ~  ║  Thanks for using AI OS!         ║  █
+    █     │ \o/ │    ║  Keep building amazing things!   ║  █
+    █     └─────┘    ║                                  ║  █
+    █                ╚══════════════════════════════════╝  █
+    █                                                      █
+    █   ██████╗ ██╗   ██╗███████╗██╗██╗                    █
+    █   ██╔══██╗╚██╗ ██╔╝██╔════╝██║██║                    █
+    █   ██████╔╝ ╚████╔╝ █████╗  ██║██║                    █
+    █   ██╔══██╗  ╚██╔╝  ██╔══╝  ╚═╝╚═╝                    █
+    █   ██████╔╝   ██║   ███████╗██╗██╗                    █
+    █   ╚═════╝    ╚═╝   ╚══════╝╚═╝╚═╝                    █
+    █                                                      █
+    ████████████████████████████████████████████████████████
+        """
         
         while True:
             try:
@@ -434,12 +470,13 @@ Session Statistics:
                 if user_input.lower() in ['exit', 'quit', 'q']:
                     if RICH_AVAILABLE:
                         if Confirm.ask("\n[yellow]Are you sure you want to exit?[/yellow]"):
-                            console.print("\n[cyan]👋 Goodbye! Thanks for using SITA.[/cyan]")
+                            console.print("\n[cyan]👋 Goodbye! Thanks for using AI OS.[/cyan]")
+                            console.print(Panel(exit_banner), style="purple")
                             break
                     else:
                         confirm = input(Colors.WARNING + "\nAre you sure you want to exit? (y/n): " + Colors.ENDC)
                         if confirm.lower() == 'y':
-                            print(Colors.CYAN + "\n👋 Goodbye! Thanks for using SITA." + Colors.ENDC)
+                            print(Colors.CYAN + "\n👋 Goodbye! Thanks for using AI OS." + Colors.ENDC)
                             break
                     continue
                 
@@ -531,7 +568,7 @@ def main():
             api_key = agent_config.openai_api_key or os.getenv("OPENAI_API_KEY")
             if not api_key:
                 print(Colors.FAIL + "Error: OpenAI API key not found in config or OPENAI_API_KEY environment variable." + Colors.ENDC)
-                print("Please run 'python sita.py', enter 'config', and set your key.")
+                print("Please run 'python main.py', enter 'config', and set your key.")
                 sys.exit(1)
             model_instance = OpenAIChat(
                 id=agent_config.model,
@@ -543,7 +580,7 @@ def main():
             api_key = agent_config.google_api_key or os.getenv("GOOGLE_API_KEY")
             if not api_key:
                 print(Colors.FAIL + "Error: Google API key not found in config or GOOGLE_API_KEY environment variable." + Colors.ENDC)
-                print("Please run 'python sita.py', enter 'config', and set your key.")
+                print("Please run 'python main.py', enter 'config', and set your key.")
                 sys.exit(1)
             model_instance = Gemini(
                 id=agent_config.model,
@@ -559,7 +596,7 @@ def main():
 
         reasoning_agent = Agent(
             model=model_instance,
-            tools=[ReasoningTools(add_instructions=True), ShellTools(), FileTools()],
+            tools=[ReasoningTools(add_instructions=True), ShellTools(), FileTools(), PythonTools()],
             instructions=dedent("""\
                 system_information = {system_information}
                 You are an expert System Intelligence Teminal Assistant with strong analytical, system administration, and IoT skills! 🧠
@@ -567,7 +604,7 @@ def main():
                 You are running on the user's system and have full access to analyze and manage it through shell commands. 
                 You will also be given IoT devices connected to the system to manage.
                 Your role is to:
-                1. Understand system queries and execute appropriate commands
+                1. Understand user queries and plan and execute commands appropriate for the current system and environment.
                 2. Analyze command outputs intelligently
                 3. Provide clear, actionable insights
                 4. Help with system administration, monitoring, and automation
@@ -582,8 +619,10 @@ def main():
                 Note:
                 - If the user asks for something which requires external connections(for eg, fetching emails from a service), come up with a plan (that can be executed from the terminal) and ask for confirmation.
                 - Once the user confirms, execute the plan. Ask for more details required from the user's end if needed.
+                - When user asks for something which requires saving data to files, name the file in a way that it is searchable and easy to understand. keep them into folder with date.
+                - If the execution output of a command is very large, save the output to a file or write a script to process the output.
                 
-                Format your responses with clear sections and use markdown for readability.
+                Format your responses with clear sections and use markdown for readability, colors to denote urgency and priority.
             """),
             add_datetime_to_instructions=True,
             stream_intermediate_steps=config.ui.show_tool_calls,
