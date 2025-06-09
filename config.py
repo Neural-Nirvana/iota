@@ -1,4 +1,4 @@
-# config.py
+# config.py - Enhanced with OpenRouter & Together AI Support
 import os
 import sqlite3
 from dataclasses import dataclass, asdict, field, fields, is_dataclass
@@ -8,7 +8,7 @@ from typing import Any
 # All settings will be stored in the same database as the agent sessions.
 DB_FILE = "tmp/data.db" 
 
-# --- Dataclasses remain the same ---
+# --- Enhanced Dataclasses with new providers ---
 @dataclass
 class NetworkConfig:
     wifi_ssid: str = ""
@@ -19,9 +19,11 @@ class NetworkConfig:
 
 @dataclass
 class AgentConfig:
-    provider: str = "openai"  # 'openai' or 'google'
+    provider: str = "openai"  # 'openai', 'google', 'openrouter', 'together'
     openai_api_key: str = ""
     google_api_key: str = ""
+    openrouter_api_key: str = ""      # NEW: OpenRouter API key
+    together_api_key: str = ""        # NEW: Together AI API key
     model: str = "gpt-4o-mini"
     temperature: float = 0.7
     max_tokens: int = 2000
@@ -51,7 +53,7 @@ class Config:
     ui: UIConfig = field(default_factory=UIConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
 
-# --- NEW: Helper function to manage DB connection and table creation ---
+# --- Helper function to manage DB connection and table creation ---
 def _get_db_conn():
     """Gets a DB connection and ensures the settings table exists."""
     os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
@@ -66,7 +68,7 @@ def _get_db_conn():
     conn.commit()
     return conn
 
-# --- REWRITTEN: `save_config` now writes to the database ---
+# --- Enhanced `save_config` with new API keys ---
 def save_config(config: Config) -> bool:
     """Save configuration to the SQLite database."""
     try:
@@ -93,7 +95,7 @@ def save_config(config: Config) -> bool:
         print(f"Error saving config to database: {e}")
         return False
 
-# --- REWRITTEN: `load_config` now reads from the database ---
+# --- Enhanced `load_config` with migration support ---
 def load_config() -> Config:
     """Load configuration from the SQLite database. Creates default if not present."""
     try:
@@ -106,11 +108,13 @@ def load_config() -> Config:
 
         if not rows:
             # No settings found, create and save the default config
-            print("No configuration found in database. Creating default settings.")
+            print("No configuration found in database. Creating default settings with multi-provider support.")
             default_config = Config()
-            # Also populate keys from environment variables on first run
+            # Populate keys from environment variables on first run
             default_config.agent.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
             default_config.agent.google_api_key = os.environ.get("GOOGLE_API_KEY", "")
+            default_config.agent.openrouter_api_key = os.environ.get("OPENROUTER_API_KEY", "")
+            default_config.agent.together_api_key = os.environ.get("TOGETHER_API_KEY", "")
             save_config(default_config)
             return default_config
 
@@ -119,13 +123,27 @@ def load_config() -> Config:
         nested_config_dict = _unflatten_dict(flat_config)
         
         # Recreate the Config object from the dictionary, applying correct types
-        return _dict_to_config(nested_config_dict)
+        config = _dict_to_config(nested_config_dict)
+        
+        # Migration: Add new API key fields if they don't exist
+        if not hasattr(config.agent, 'openrouter_api_key'):
+            config.agent.openrouter_api_key = os.environ.get("OPENROUTER_API_KEY", "")
+        if not hasattr(config.agent, 'together_api_key'):
+            config.agent.together_api_key = os.environ.get("TOGETHER_API_KEY", "")
+        
+        return config
 
     except Exception as e:
         print(f"Error loading config from database: {e}. Returning default config.")
-        return Config()
+        default_config = Config()
+        # Ensure all API keys are populated from environment
+        default_config.agent.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+        default_config.agent.google_api_key = os.environ.get("GOOGLE_API_KEY", "")
+        default_config.agent.openrouter_api_key = os.environ.get("OPENROUTER_API_KEY", "")
+        default_config.agent.together_api_key = os.environ.get("TOGETHER_API_KEY", "")
+        return default_config
 
-# --- NEW HELPER FUNCTIONS ---
+# --- Helper Functions (unchanged) ---
 def _flatten_dict(d: dict, parent_key: str = '', sep: str = '.') -> dict:
     """Flattens a nested dictionary."""
     items = []
@@ -183,53 +201,121 @@ def _dict_to_config(d: dict) -> Config:
 
     return _convert_node(d, Config)
 
-
 # ---------------------------------------------------------------------------
-# 🔑  Load or ask for an OpenAI API key
+# 🔑  Enhanced API Key Management for Multiple Providers
 # ---------------------------------------------------------------------------
 from pathlib import Path
 import os, sys
 try:
     from rich.prompt import Prompt  # nice colour prompt if Rich is bundled
+    from rich.console import Console
+    from rich.panel import Panel
 except ImportError:
     Prompt = None
+    Console = None
 
 APP_DIR   = Path.home() / ".ai-os"           # ~/.ai-os/
-CFG_FILE  = APP_DIR / "settings.toml"        # you already create this
+CFG_FILE  = APP_DIR / "settings.toml"        # Enhanced settings file
 
 def get_openai_api_key() -> str:
-    # 1 · environment variable still has top priority
+    """Enhanced API key management with multi-provider support"""
+    # 1 · environment variable still has top priority
     key = os.getenv("OPENAI_API_KEY")
 
-    # 2 · fall back to the config file created earlier
+    # 2 · fall back to the config file
     if not key and CFG_FILE.exists():
         import tomllib
-        key = tomllib.loads(CFG_FILE.read_text()).get("OPENAI_API_KEY")
+        config_data = tomllib.loads(CFG_FILE.read_text())
+        key = config_data.get("OPENAI_API_KEY")
 
-    # 3 · interactive fallback
+    # 3 · interactive fallback with enhanced UI
     if not key:
-        print("\n🔑  OpenAI API key not found.")
-        print("    You can get one at https://platform.openai.com/api-keys\n")
+        if Console:
+            console = Console()
+            console.print(Panel.fit(
+                "[bold cyan]🔑 AI OS Enhanced Setup[/bold cyan]\n\n"
+                "OpenAI API key not found. You can:\n"
+                "• Get one at [blue]https://platform.openai.com/api-keys[/blue]\n"
+                "• Or configure other providers (Google, OpenRouter, Together AI) later",
+                border_style="bright_blue"
+            ))
+        else:
+            print("\n🔑  OpenAI API key not found.")
+            print("    You can get one at https://platform.openai.com/api-keys")
+            print("    Or configure other providers later via 'config' command\n")
 
         if Prompt:
-            key = Prompt.ask("[bold cyan]Paste your API key (or press ↵ to abort)[/]")
+            key = Prompt.ask("[bold cyan]Paste your OpenAI API key (or press ↵ to continue without)[/]")
         else:
-            key = input("Paste your API key (leave blank to abort) > ").strip()
+            key = input("Paste your OpenAI API key (leave blank to continue) > ").strip()
 
-        if not key:
-            sys.exit("\nNo key supplied – exiting.\n")
+        if key:
+            # Save it for next time (chmod 600 for privacy)
+            APP_DIR.mkdir(exist_ok=True)
+            
+            # Enhanced settings file with all providers
+            settings_content = f'''# AI OS Enhanced - Multi-Provider Configuration
+OPENAI_API_KEY = "{key}"
 
-        # Save it for next time (chmod 600 for privacy)
-        APP_DIR.mkdir(exist_ok=True)
-        CFG_FILE.write_text(f'OPENAI_API_KEY = "{key}"\n')
-        CFG_FILE.chmod(0o600)
-        print("✅  Key saved to ~/.ai-os/settings.toml")
+# Uncomment and set these when you get API keys for other providers:
+# GOOGLE_API_KEY = "your-google-key-here"
+# OPENROUTER_API_KEY = "your-openrouter-key-here"  
+# TOGETHER_API_KEY = "your-together-key-here"
 
-    # 4 · finally expose it to the rest of the code
-    os.environ["OPENAI_API_KEY"] = key
-    return key
+# Provider URLs:
+# Google: https://makersuite.google.com/app/apikey
+# OpenRouter: https://openrouter.ai/keys
+# Together AI: https://api.together.xyz/settings/api-keys
+'''
+            
+            CFG_FILE.write_text(settings_content)
+            CFG_FILE.chmod(0o600)
+            
+            if Console:
+                console = Console()
+                console.print("[bright_green]✅ API key saved to ~/.ai-os/settings.toml[/bright_green]")
+                console.print("[dim]You can configure additional providers via the 'config' command[/dim]")
+            else:
+                print("✅  API key saved to ~/.ai-os/settings.toml")
+                print("    You can configure additional providers via the 'config' command")
+        else:
+            if Console:
+                console = Console()
+                console.print("[yellow]⚠️  No OpenAI key provided. You can set up any provider via 'config' command.[/yellow]")
+            else:
+                print("⚠️  No OpenAI key provided. You can set up any provider via 'config' command.")
 
+    # 4 · expose to environment for compatibility
+    if key:
+        os.environ["OPENAI_API_KEY"] = key
+    
+    return key or ""
 
-# No longer need create_default_config as a separate public function.
-# load_config handles the creation of defaults on the first run.
-create_default_config = lambda: None # No-op function for compatibility
+def get_api_keys():
+    """Load all API keys from various sources"""
+    keys = {}
+    
+    # Try environment variables first
+    keys['openai'] = os.getenv("OPENAI_API_KEY", "")
+    keys['google'] = os.getenv("GOOGLE_API_KEY", "")
+    keys['openrouter'] = os.getenv("OPENROUTER_API_KEY", "")
+    keys['together'] = os.getenv("TOGETHER_API_KEY", "")
+    
+    # Try config file
+    if CFG_FILE.exists():
+        try:
+            import tomllib
+            config_data = tomllib.loads(CFG_FILE.read_text())
+            for provider in ['openai', 'google', 'openrouter', 'together']:
+                env_key = f"{provider.upper()}_API_KEY"
+                if not keys[provider] and env_key in config_data:
+                    keys[provider] = config_data[env_key]
+                    # Also set in environment for consistency
+                    os.environ[env_key] = config_data[env_key]
+        except Exception as e:
+            print(f"Warning: Could not load config file: {e}")
+    
+    return keys
+
+# Backwards compatibility
+create_default_config = lambda: None
