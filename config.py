@@ -183,6 +183,53 @@ def _dict_to_config(d: dict) -> Config:
 
     return _convert_node(d, Config)
 
+
+# ---------------------------------------------------------------------------
+# 🔑  Load or ask for an OpenAI API key
+# ---------------------------------------------------------------------------
+from pathlib import Path
+import os, sys
+try:
+    from rich.prompt import Prompt  # nice colour prompt if Rich is bundled
+except ImportError:
+    Prompt = None
+
+APP_DIR   = Path.home() / ".ai-os"           # ~/.ai-os/
+CFG_FILE  = APP_DIR / "settings.toml"        # you already create this
+
+def get_openai_api_key() -> str:
+    # 1 · environment variable still has top priority
+    key = os.getenv("OPENAI_API_KEY")
+
+    # 2 · fall back to the config file created earlier
+    if not key and CFG_FILE.exists():
+        import tomllib
+        key = tomllib.loads(CFG_FILE.read_text()).get("OPENAI_API_KEY")
+
+    # 3 · interactive fallback
+    if not key:
+        print("\n🔑  OpenAI API key not found.")
+        print("    You can get one at https://platform.openai.com/api-keys\n")
+
+        if Prompt:
+            key = Prompt.ask("[bold cyan]Paste your API key (or press ↵ to abort)[/]")
+        else:
+            key = input("Paste your API key (leave blank to abort) > ").strip()
+
+        if not key:
+            sys.exit("\nNo key supplied – exiting.\n")
+
+        # Save it for next time (chmod 600 for privacy)
+        APP_DIR.mkdir(exist_ok=True)
+        CFG_FILE.write_text(f'OPENAI_API_KEY = "{key}"\n')
+        CFG_FILE.chmod(0o600)
+        print("✅  Key saved to ~/.ai-os/settings.toml")
+
+    # 4 · finally expose it to the rest of the code
+    os.environ["OPENAI_API_KEY"] = key
+    return key
+
+
 # No longer need create_default_config as a separate public function.
 # load_config handles the creation of defaults on the first run.
 create_default_config = lambda: None # No-op function for compatibility
