@@ -83,6 +83,21 @@ class NeuralTerminalGUI:
         self.root.after(100, self._poll_queue)
 
         self._banner()
+        if self.agent is None:
+            self._append(
+                "⚠ No API key configured. Open **Edit ▸ Preferences…** to set your "
+                "provider, model and key, then click *Save & Restart Agent*.",
+                tag="error",
+            )
+            # pop the dialog automatically on first launch
+            self.root.after(100, self._prefs_dialog)
+
+        # spinner state
+        self._spinner_frames = ["|","/","-","\\"]  # braille dots
+        self._spinner_job = None          # after() id
+        self._spinner_index = 0
+        self._spinner_mark = None         # text index where we drew it
+
 
     # ───────────────────────── Internal helpers ───────────────────────── #
 
@@ -116,9 +131,11 @@ class NeuralTerminalGUI:
         if prompt.startswith("$"):                     # ← shell mode
             cmd = prompt[1:].strip()
             self._append(f"$ {cmd}", tag="user")
+            self._start_spinner("executing")
             threading.Thread(target=self._shell_task, args=(cmd,), daemon=True).start()
         else:                                          # ← AI mode
             self._append(f"▶ {prompt}", tag="user")
+            self._start_spinner("thinking")
             threading.Thread(target=self._agent_task, args=(prompt,), daemon=True).start()
 
     # ───────────────────────── Shell helpers ───────────────────── #
@@ -149,6 +166,10 @@ class NeuralTerminalGUI:
             • human-readable list of tool calls
         Works on Agno ≥1.3 and needs no version branching.
         """
+        if self.agent is None:
+            self.queue.put({"error": "Agent not initialised — add an API key in Preferences."})
+            return
+
         try:
             resp = self.agent.run(
                 prompt,
@@ -185,6 +206,41 @@ class NeuralTerminalGUI:
         except Exception as e:
             self.queue.put({"error": str(e)})
 
+    # ───────────────────────── Spinner helpers ────────────────────── #
+    def _start_spinner(self, label: str = "thinking"):
+        """Insert an animated one-liner like  ⠋ thinking... and update it."""
+        if self._spinner_job:          # already running
+            return
+
+        self.text.configure(state=tk.NORMAL)
+        self._spinner_mark = self.text.index(tk.END)      # remember position
+        self.text.insert(tk.END, f"{self._spinner_frames[0]} {label}...\n", "spin")
+        self.text.tag_configure("spin", foreground="#bd93f9")
+        self.text.configure(state=tk.DISABLED)
+        self._spinner_job = self.root.after(100, self._spin_tick)
+
+    def _spin_tick(self):
+        self._spinner_index = (self._spinner_index + 1) % len(self._spinner_frames)
+        frame = self._spinner_frames[self._spinner_index]
+
+        self.text.configure(state=tk.NORMAL)
+        # overwrite only the spinner glyph
+        self.text.delete(self._spinner_mark, f"{self._spinner_mark}+1c")
+        self.text.insert(self._spinner_mark, frame, "spin")
+        self.text.see(tk.END)  
+        self.text.configure(state=tk.DISABLED)
+
+        self._spinner_job = self.root.after(100, self._spin_tick)
+        print("tick", self._spinner_frames[self._spinner_index])
+
+    def _stop_spinner(self):
+        if self._spinner_job:
+            self.root.after_cancel(self._spinner_job)
+            self._spinner_job = None
+            # remove the line entirely
+            self.text.configure(state=tk.NORMAL)
+            self.text.delete(self._spinner_mark, f"{self._spinner_mark} lineend")
+            self.text.configure(state=tk.DISABLED)
 
     def _show_thinking(self, data: dict):
         """Pop-up window displaying reasoning + tool calls."""
@@ -218,6 +274,10 @@ class NeuralTerminalGUI:
 
     def _poll_queue(self):
         try:
+            # first arrival from worker ⇒ stop spinner
+            if self._spinner_job:
+                self._stop_spinner()
+
             while True:
                 item = self.queue.get_nowait()
 
@@ -309,20 +369,22 @@ class NeuralTerminalGUI:
 
 # ───────────────────────── Agent factory ─────────────────────────── #
 
-def build_agent(cfg) -> Agent:
+def build_agent(cfg, allow_missing_key: bool = False) -> Agent | None:
     provider = cfg.agent.provider.lower()
     model_id = cfg.agent.model
     temp = cfg.agent.temperature
     max_tok = cfg.agent.max_tokens
 
     def missing(msg: str):
+        if allow_missing_key:
+            return None
         messagebox.showerror("AI‑OS", msg)
         sys.exit(1)
 
     if provider == "openai":
         key = cfg.agent.openai_api_key or os.getenv("OPENAI_API_KEY")
         if not key:
-            missing("OpenAI API key missing.")
+            return missing("OpenAI API key missing.")
         model = OpenAIChat(id=model_id, api_key=key, temperature=temp, max_tokens=max_tok)
     elif provider == "google":
         key = cfg.agent.google_api_key or os.getenv("GOOGLE_API_KEY")
@@ -347,7 +409,9 @@ def build_agent(cfg) -> Agent:
         tools=[ReasoningTools(add_instructions=True), ShellTools(), FileTools(), PythonTools()],
         instructions=dedent(
             f"""
-            You are a System‑Intelligence Assistant running inside a GUI terminal.
+            You are a System‑Intelligence Assistant running inside a GUI terminal. 
+            Run rhe shell commands yourself if they are not harmful.
+            Confirm harmful shell commands along with their consequences if executed before running commands.
             System: {platform.system()} {platform.release()}
             Provider: {provider} | Model: {model_id}
             Be concise, helpful, and warn before dangerous commands.
@@ -368,5 +432,6 @@ if __name__ == "__main__":
     os.makedirs("logs", exist_ok=True)
     os.makedirs("exports", exist_ok=True)
 
-    agent = build_agent(config)
+    # allow_missing_key=True so the app boots without secrets
+    agent = build_agent(config, allow_missing_key=True)
     NeuralTerminalGUI(agent).run()
