@@ -1,4 +1,4 @@
-# 🤖 IOTA - Intelligent Operations Terminal Assistant
+# 🤖 Neural Terminal - Intelligent Operations Terminal Assistant
 
 <div align="center">
 
@@ -19,7 +19,7 @@
 ██     ╚═╝  ╚═╝╚═╝       ╚═════╝ ╚══════╝       ██
 ██                                              ██
 ██    ╔═══════════════════════════════════════╗ ██
-██    ║ For Tinkerers and Builders            ║ ██
+██    ║ For Builders, From Neural Nirvana     ║ ██
 ██    ╚═══════════════════════════════════════╝ ██
 ██                                              ██
 ██████████████████████████████████████████████████
@@ -126,7 +126,7 @@ Pre-built executables for Windows, macOS, and Linux are available in our [Releas
 
 ### 1. First Launch
 ```bash
-python main.py
+python app.py
 ```
 
 ### 2. Configure Your AI Provider
