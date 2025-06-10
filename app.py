@@ -1,14 +1,12 @@
-# app.py – Integrated Tk‑GUI version with Markdown Rendering v1.3
+# app.py – Integrated Tk‑GUI version with Markdown Rendering and Theme Support v1.4
 """
 A terminal based AI agent that lets you interact with any device.
-Changelog v1.3
+Changelog v1.4
 ---------------
-* **Markdown Rendering**: Added comprehensive markdown parsing and rendering
-* **Rich Text**: Support for headers, bold, italic, code blocks, inline code, lists, quotes
-* **Syntax Highlighting**: Code blocks with syntax highlighting
-* **Links**: Clickable links (displayed but not clickable in this version)
-* **Lists**: Proper bullet and numbered list formatting
-* **Blockquotes**: Styled quote blocks
+* **Theme Support**: Added configurable themes (Retro, Minimal, GenZ)
+* **Dynamic Styling**: Styles now change based on selected theme
+* **Enhanced Preferences**: Theme selection in preferences dialog
+* **Live Theme Switching**: Apply theme changes without restart
 """
 from __future__ import annotations
 
@@ -22,7 +20,7 @@ import sys
 import threading
 from datetime import datetime
 from textwrap import dedent
-from typing import Any
+from typing import Any, Dict
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, simpledialog
@@ -40,14 +38,116 @@ from agno.tools.shell import ShellTools
 from agno.utils.log import logger
 
 try:
-    from config import load_config
+    from config import load_config, save_config
 except ImportError:
     print("config.py missing – create one with create_default_config() first.")
     sys.exit(1)
 
 
+class ThemeManager:
+    """Manages different visual themes for the terminal."""
+    
+    THEMES = {
+        "retro": {
+            "name": "Retro Terminal",
+            "description": "Classic green-on-black terminal vibes",
+            "colors": {
+                "background": "#000000",
+                "foreground": "#00ff00",
+                "comment": "#00aa00",
+                "cyan": "#00ffff",
+                "green": "#00ff00",
+                "pink": "#ff00ff",
+                "purple": "#aa00aa",
+                "red": "#ff0000",
+                "orange": "#ffaa00",
+                "yellow": "#ffff00",
+                "selection": "#333333",
+                "code_bg": "#111111",
+                "quote_bg": "#0a0a0a",
+            }
+        },
+        "minimal": {
+            "name": "Minimal Clean",
+            "description": "Clean, professional black and white",
+            "colors": {
+                "background": "#1a1a1a",
+                "foreground": "#e0e0e0",
+                "comment": "#808080",
+                "cyan": "#b0b0b0",
+                "green": "#d0d0d0",
+                "pink": "#c0c0c0",
+                "purple": "#a0a0a0",
+                "red": "#ff6b6b",
+                "orange": "#ffa500",
+                "yellow": "#ffeb3b",
+                "selection": "#404040",
+                "code_bg": "#2a2a2a",
+                "quote_bg": "#252525",
+            }
+        },
+        "genz": {
+            "name": "GenZ Vibes",
+            "description": "Bright, vibrant neon colors",
+            "colors": {
+                "background": "#0d1117",
+                "foreground": "#f0f6fc",
+                "comment": "#7c3aed",
+                "cyan": "#00d4aa",
+                "green": "#39ff14",
+                "pink": "#ff007f",
+                "purple": "#bf00ff",
+                "red": "#ff073a",
+                "orange": "#ff8c00",
+                "yellow": "#ffff00",
+                "selection": "#21262d",
+                "code_bg": "#161b22",
+                "quote_bg": "#0d1117",
+            }
+        },
+        "dracula": {
+            "name": "Dracula Classic",
+            "description": "The classic Dracula theme",
+            "colors": {
+                "background": "#282a36",
+                "foreground": "#f8f8f2",
+                "comment": "#6272a4",
+                "cyan": "#8be9fd",
+                "green": "#50fa7b",
+                "pink": "#ff79c6",
+                "purple": "#bd93f9",
+                "red": "#ff5555",
+                "orange": "#ffb86c",
+                "yellow": "#f1fa8c",
+                "selection": "#44475a",
+                "code_bg": "#44475a",
+                "quote_bg": "#383a45",
+            }
+        }
+    }
+    
+    @classmethod
+    def get_theme_names(cls) -> list[str]:
+        """Get list of available theme names."""
+        return list(cls.THEMES.keys())
+    
+    @classmethod
+    def get_theme_colors(cls, theme_name: str) -> Dict[str, str]:
+        """Get color palette for a specific theme."""
+        return cls.THEMES.get(theme_name, cls.THEMES["dracula"])["colors"]
+    
+    @classmethod
+    def get_theme_info(cls, theme_name: str) -> Dict[str, str]:
+        """Get theme name and description."""
+        theme = cls.THEMES.get(theme_name, cls.THEMES["dracula"])
+        return {
+            "name": theme["name"],
+            "description": theme["description"]
+        }
+
+
 class Styles:
-    """A collection of style constants for the GUI."""
+    """A collection of style constants for the GUI - now theme-aware."""
 
     FONT_FAMILY = ("Fira Code", "Consolas", "Courier New")
     FONT_SIZE_NORMAL = 11
@@ -64,62 +164,75 @@ class Styles:
     FONT_H2 = (FONT_FAMILY, FONT_SIZE_LARGE, "bold")
     FONT_H3 = (FONT_FAMILY, FONT_SIZE_NORMAL, "bold")
 
-    # Dracula-inspired theme
-    COLOR_BACKGROUND = "#282a36"
-    COLOR_FOREGROUND = "#f8f8f2"
-    COLOR_COMMENT = "#6272a4"
-    COLOR_CYAN = "#8be9fd"
-    COLOR_GREEN = "#50fa7b"
-    COLOR_PINK = "#ff79c6"
-    COLOR_PURPLE = "#bd93f9"
-    COLOR_RED = "#ff5555"
-    COLOR_ORANGE = "#ffb86c"
-    COLOR_YELLOW = "#f1fa8c"
-    COLOR_SELECTION = "#44475a"
-    COLOR_CODE_BG = "#44475a"
-    COLOR_QUOTE_BG = "#383a45"
+    def __init__(self, theme_name: str = "dracula"):
+        """Initialize styles with a specific theme."""
+        self.update_theme(theme_name)
+    
+    def update_theme(self, theme_name: str):
+        """Update color scheme based on theme."""
+        colors = ThemeManager.get_theme_colors(theme_name)
+        
+        self.COLOR_BACKGROUND = colors["background"]
+        self.COLOR_FOREGROUND = colors["foreground"]
+        self.COLOR_COMMENT = colors["comment"]
+        self.COLOR_CYAN = colors["cyan"]
+        self.COLOR_GREEN = colors["green"]
+        self.COLOR_PINK = colors["pink"]
+        self.COLOR_PURPLE = colors["purple"]
+        self.COLOR_RED = colors["red"]
+        self.COLOR_ORANGE = colors["orange"]
+        self.COLOR_YELLOW = colors["yellow"]
+        self.COLOR_SELECTION = colors["selection"]
+        self.COLOR_CODE_BG = colors["code_bg"]
+        self.COLOR_QUOTE_BG = colors["quote_bg"]
 
 
 class MarkdownRenderer:
     """Renders markdown text in a tkinter Text widget with proper formatting."""
     
-    def __init__(self, text_widget):
+    def __init__(self, text_widget, styles):
         self.text = text_widget
+        self.styles = styles
         self._setup_tags()
     
     def _setup_tags(self):
         """Configure text tags for different markdown elements."""
         # Headers
-        self.text.tag_configure("h1", font=Styles.FONT_H1, foreground=Styles.COLOR_PINK, spacing1=10, spacing3=5)
-        self.text.tag_configure("h2", font=Styles.FONT_H2, foreground=Styles.COLOR_PURPLE, spacing1=8, spacing3=4)
-        self.text.tag_configure("h3", font=Styles.FONT_H3, foreground=Styles.COLOR_CYAN, spacing1=6, spacing3=3)
+        self.text.tag_configure("h1", font=self.styles.FONT_H1, foreground=self.styles.COLOR_PINK, spacing1=10, spacing3=5)
+        self.text.tag_configure("h2", font=self.styles.FONT_H2, foreground=self.styles.COLOR_PURPLE, spacing1=8, spacing3=4)
+        self.text.tag_configure("h3", font=self.styles.FONT_H3, foreground=self.styles.COLOR_CYAN, spacing1=6, spacing3=3)
         
         # Text styles
-        self.text.tag_configure("bold", font=Styles.FONT_BOLD, foreground=Styles.COLOR_FOREGROUND)
-        self.text.tag_configure("italic", font=Styles.FONT_ITALIC, foreground=Styles.COLOR_FOREGROUND)
-        self.text.tag_configure("bold_italic", font=Styles.FONT_BOLD_ITALIC, foreground=Styles.COLOR_FOREGROUND)
+        self.text.tag_configure("bold", font=self.styles.FONT_BOLD, foreground=self.styles.COLOR_FOREGROUND)
+        self.text.tag_configure("italic", font=self.styles.FONT_ITALIC, foreground=self.styles.COLOR_FOREGROUND)
+        self.text.tag_configure("bold_italic", font=self.styles.FONT_BOLD_ITALIC, foreground=self.styles.COLOR_FOREGROUND)
         
         # Code
-        self.text.tag_configure("code", font=Styles.FONT_CODE, foreground=Styles.COLOR_ORANGE, 
-                               background=Styles.COLOR_CODE_BG, borderwidth=1, relief="solid")
-        self.text.tag_configure("code_block", font=Styles.FONT_CODE, foreground=Styles.COLOR_GREEN,
-                               background=Styles.COLOR_CODE_BG, lmargin1=20, lmargin2=20, 
+        self.text.tag_configure("code", font=self.styles.FONT_CODE, foreground=self.styles.COLOR_ORANGE, 
+                               background=self.styles.COLOR_CODE_BG, borderwidth=1, relief="solid")
+        self.text.tag_configure("code_block", font=self.styles.FONT_CODE, foreground=self.styles.COLOR_GREEN,
+                               background=self.styles.COLOR_CODE_BG, lmargin1=20, lmargin2=20, 
                                spacing1=5, spacing3=5, borderwidth=1, relief="solid")
         
         # Lists
         self.text.tag_configure("list_item", lmargin1=20, lmargin2=40, spacing1=2)
-        self.text.tag_configure("bullet", foreground=Styles.COLOR_PINK, font=Styles.FONT_BOLD)
+        self.text.tag_configure("bullet", foreground=self.styles.COLOR_PINK, font=self.styles.FONT_BOLD)
         
         # Quotes
-        self.text.tag_configure("quote", lmargin1=20, lmargin2=20, foreground=Styles.COLOR_COMMENT,
-                               background=Styles.COLOR_QUOTE_BG, font=Styles.FONT_ITALIC, 
+        self.text.tag_configure("quote", lmargin1=20, lmargin2=20, foreground=self.styles.COLOR_COMMENT,
+                               background=self.styles.COLOR_QUOTE_BG, font=self.styles.FONT_ITALIC, 
                                spacing1=5, spacing3=5, borderwidth=1, relief="solid")
         
         # Links
-        self.text.tag_configure("link", foreground=Styles.COLOR_CYAN, underline=True)
+        self.text.tag_configure("link", foreground=self.styles.COLOR_CYAN, underline=True)
         
         # Default
-        self.text.tag_configure("normal", foreground=Styles.COLOR_FOREGROUND, font=Styles.FONT_NORMAL)
+        self.text.tag_configure("normal", foreground=self.styles.COLOR_FOREGROUND, font=self.styles.FONT_NORMAL)
+    
+    def update_theme(self, styles):
+        """Update markdown renderer with new theme styles."""
+        self.styles = styles
+        self._setup_tags()
     
     def render(self, markdown_text: str):
         """Parse and render markdown text in the text widget."""
@@ -309,21 +422,26 @@ class NeuralTerminalGUI:
 
     def __init__(self, agent: Agent):
         self.agent = agent
+        self.config = load_config()
+        
+        # Initialize styles with current theme
+        self.styles = Styles(self.config.ui.theme)
+        
         self.root = tk.Tk()
         self.root.title("AIOS Neural Terminal 🌟")
         self.root.geometry("1000x700")
-        self.root.configure(bg=Styles.COLOR_BACKGROUND)
+        self.root.configure(bg=self.styles.COLOR_BACKGROUND)
 
         # Main text area
         self.text = scrolledtext.ScrolledText(
             self.root,
             wrap=tk.WORD,
-            font=Styles.FONT_NORMAL,
-            bg=Styles.COLOR_BACKGROUND,
-            fg=Styles.COLOR_FOREGROUND,
-            selectbackground=Styles.COLOR_SELECTION,
-            selectforeground=Styles.COLOR_FOREGROUND,
-            insertbackground=Styles.COLOR_FOREGROUND,  # Cursor color
+            font=self.styles.FONT_NORMAL,
+            bg=self.styles.COLOR_BACKGROUND,
+            fg=self.styles.COLOR_FOREGROUND,
+            selectbackground=self.styles.COLOR_SELECTION,
+            selectforeground=self.styles.COLOR_FOREGROUND,
+            insertbackground=self.styles.COLOR_FOREGROUND,  # Cursor color
             borderwidth=0,
             highlightthickness=0,
             padx=10,
@@ -333,24 +451,26 @@ class NeuralTerminalGUI:
         self.text.configure(state=tk.DISABLED)
 
         # Initialize markdown renderer
-        self.markdown_renderer = MarkdownRenderer(self.text)
+        self.markdown_renderer = MarkdownRenderer(self.text, self.styles)
 
         # Bottom input frame
-        bottom = tk.Frame(self.root, bg=Styles.COLOR_BACKGROUND)
+        bottom = tk.Frame(self.root, bg=self.styles.COLOR_BACKGROUND)
         bottom.pack(fill=tk.X, padx=10, pady=(0, 10))
 
         # Input prompt symbol
-        tk.Label(
-            bottom, text="▶", font=Styles.FONT_BOLD, fg=Styles.COLOR_PINK, bg=Styles.COLOR_BACKGROUND
-        ).pack(side=tk.LEFT, padx=(0, 5))
+        self.prompt_label = tk.Label(
+            bottom, text="▶", font=self.styles.FONT_BOLD, 
+            fg=self.styles.COLOR_PINK, bg=self.styles.COLOR_BACKGROUND
+        )
+        self.prompt_label.pack(side=tk.LEFT, padx=(0, 5))
 
         # Input entry field
         self.entry = tk.Entry(
             bottom,
-            font=Styles.FONT_NORMAL,
-            bg=Styles.COLOR_BACKGROUND,
-            fg=Styles.COLOR_FOREGROUND,
-            insertbackground=Styles.COLOR_FOREGROUND,
+            font=self.styles.FONT_NORMAL,
+            bg=self.styles.COLOR_BACKGROUND,
+            fg=self.styles.COLOR_FOREGROUND,
+            insertbackground=self.styles.COLOR_FOREGROUND,
             relief=tk.FLAT,
             highlightthickness=0,
         )
@@ -380,13 +500,50 @@ class NeuralTerminalGUI:
         self._spinner_index = 0
         self._spinner_mark = None
 
+    def _apply_theme(self, theme_name: str):
+        """Apply a new theme to the entire interface."""
+        self.styles.update_theme(theme_name)
+        
+        # Update root window
+        self.root.configure(bg=self.styles.COLOR_BACKGROUND)
+        
+        # Update main text area
+        self.text.configure(
+            bg=self.styles.COLOR_BACKGROUND,
+            fg=self.styles.COLOR_FOREGROUND,
+            selectbackground=self.styles.COLOR_SELECTION,
+            selectforeground=self.styles.COLOR_FOREGROUND,
+            insertbackground=self.styles.COLOR_FOREGROUND,
+        )
+        
+        # Update prompt label
+        self.prompt_label.configure(
+            fg=self.styles.COLOR_PINK,
+            bg=self.styles.COLOR_BACKGROUND
+        )
+        
+        # Update entry field
+        self.entry.configure(
+            bg=self.styles.COLOR_BACKGROUND,
+            fg=self.styles.COLOR_FOREGROUND,
+            insertbackground=self.styles.COLOR_FOREGROUND,
+        )
+        
+        # Update markdown renderer
+        self.markdown_renderer.update_theme(self.styles)
+        
+        # Update bottom frame background
+        for widget in self.root.winfo_children():
+            if isinstance(widget, tk.Frame):
+                widget.configure(bg=self.styles.COLOR_BACKGROUND)
+
     def _setup_menubar(self):
         menubar = tk.Menu(
             self.root,
-            bg=Styles.COLOR_BACKGROUND,
-            fg=Styles.COLOR_FOREGROUND,
-            activebackground=Styles.COLOR_SELECTION,
-            activeforeground=Styles.COLOR_FOREGROUND,
+            bg=self.styles.COLOR_BACKGROUND,
+            fg=self.styles.COLOR_FOREGROUND,
+            activebackground=self.styles.COLOR_SELECTION,
+            activeforeground=self.styles.COLOR_FOREGROUND,
             relief=tk.FLAT,
             borderwidth=0,
         )
@@ -395,31 +552,53 @@ class NeuralTerminalGUI:
         # File Menu
         filemenu = tk.Menu(menubar, tearoff=0)
         filemenu.add_command(label="Export Session", command=self._export)
-        filemenu.add_separator(background=Styles.COLOR_SELECTION)
+        filemenu.add_separator(background=self.styles.COLOR_SELECTION)
         filemenu.add_command(label="Quit", command=self.root.quit, accelerator="Ctrl+Q")
         menubar.add_cascade(label="File", menu=filemenu)
 
         # Edit Menu
         editmenu = tk.Menu(menubar, tearoff=0)
         editmenu.add_command(label="Preferences…", command=self._prefs_dialog)
+        editmenu.add_separator(background=self.styles.COLOR_SELECTION)
+        
+        # Theme submenu
+        thememenu = tk.Menu(editmenu, tearoff=0)
+        for theme_key in ThemeManager.get_theme_names():
+            theme_info = ThemeManager.get_theme_info(theme_key)
+            thememenu.add_command(
+                label=f"{theme_info['name']} - {theme_info['description']}", 
+                command=lambda t=theme_key: self._change_theme(t)
+            )
+        editmenu.add_cascade(label="Themes", menu=thememenu)
+        
         menubar.add_cascade(label="Edit", menu=editmenu)
 
         # Apply styles to submenus
-        for menu in (filemenu, editmenu):
+        for menu in (filemenu, editmenu, thememenu):
             menu.config(
-                bg=Styles.COLOR_BACKGROUND,
-                fg=Styles.COLOR_FOREGROUND,
-                activebackground=Styles.COLOR_SELECTION,
-                activeforeground=Styles.COLOR_PINK,  # Highlight selection
+                bg=self.styles.COLOR_BACKGROUND,
+                fg=self.styles.COLOR_FOREGROUND,
+                activebackground=self.styles.COLOR_SELECTION,
+                activeforeground=self.styles.COLOR_PINK,  # Highlight selection
                 relief=tk.FLAT,
             )
+
+    def _change_theme(self, theme_name: str):
+        """Change the current theme and save to config."""
+        self.config.ui.theme = theme_name
+        save_config(self.config)
+        self._apply_theme(theme_name)
+        
+        theme_info = ThemeManager.get_theme_info(theme_name)
+        self._append_markdown(f"\n🎨 **Theme changed to {theme_info['name']}** — {theme_info['description']}\n", tag="info")
 
     # ───────────────────────── Internal helpers ───────────────────────── #
 
     def _banner(self):
+        theme_info = ThemeManager.get_theme_info(self.config.ui.theme)
         info = (
-            f"**Provider:** {config.agent.provider.title()}  |  **Model:** {config.agent.model}\n"
-            f"**System:** {platform.system()} {platform.release()}\n"
+            f"**Provider:** {self.config.agent.provider.title()}  |  **Model:** {self.config.agent.model}\n"
+            f"**Theme:** {theme_info['name']}  |  **System:** {platform.system()} {platform.release()}\n"
             f"**Session start:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
             "Type `help` for commands or `$` to run shell commands (e.g., `$ ls -l`)."
         )
@@ -432,14 +611,14 @@ class NeuralTerminalGUI:
         self.text.configure(state=tk.NORMAL)
         if tag:
             tag_colors = {
-                "user": Styles.COLOR_PINK,
-                "error": Styles.COLOR_RED,
-                "info": Styles.COLOR_COMMENT,
-                "spin": Styles.COLOR_PURPLE,
-                "shell_out": Styles.COLOR_GREEN,
-                "agent_response": Styles.COLOR_FOREGROUND,
+                "user": self.styles.COLOR_PINK,
+                "error": self.styles.COLOR_RED,
+                "info": self.styles.COLOR_COMMENT,
+                "spin": self.styles.COLOR_PURPLE,
+                "shell_out": self.styles.COLOR_GREEN,
+                "agent_response": self.styles.COLOR_FOREGROUND,
             }
-            self.text.tag_configure(tag, foreground=tag_colors.get(tag, Styles.COLOR_FOREGROUND))
+            self.text.tag_configure(tag, foreground=tag_colors.get(tag, self.styles.COLOR_FOREGROUND))
         self.text.insert(tk.END, text + "\n", tag)
         self.text.see(tk.END)
         self.text.configure(state=tk.DISABLED)
@@ -453,13 +632,13 @@ class NeuralTerminalGUI:
         # For special tags like error, info, etc., apply the tag to the entire text
         if tag and tag in ["user", "error", "info", "spin", "shell_out"]:
             tag_colors = {
-                "user": Styles.COLOR_PINK,
-                "error": Styles.COLOR_RED,
-                "info": Styles.COLOR_COMMENT,
-                "spin": Styles.COLOR_PURPLE,
-                "shell_out": Styles.COLOR_GREEN,
+                "user": self.styles.COLOR_PINK,
+                "error": self.styles.COLOR_RED,
+                "info": self.styles.COLOR_COMMENT,
+                "spin": self.styles.COLOR_PURPLE,
+                "shell_out": self.styles.COLOR_GREEN,
             }
-            self.text.tag_configure(tag, foreground=tag_colors.get(tag, Styles.COLOR_FOREGROUND))
+            self.text.tag_configure(tag, foreground=tag_colors.get(tag, self.styles.COLOR_FOREGROUND))
             self.text.insert(tk.END, text + "\n", tag)
         else:
             # Parse and render markdown
@@ -553,7 +732,7 @@ class NeuralTerminalGUI:
             self.text.insert(tk.END, "\n")
         self._spinner_mark = self.text.index(f"{tk.END}-2c")  # remember position
         self.text.insert(tk.END, f"{self._spinner_frames[0]} {label}...\n", "spin")
-        self.text.tag_configure("spin", foreground=Styles.COLOR_PURPLE)
+        self.text.tag_configure("spin", foreground=self.styles.COLOR_PURPLE)
         self.text.configure(state=tk.DISABLED)
         self._spinner_job = self.root.after(100, self._spin_tick)
 
@@ -585,15 +764,15 @@ class NeuralTerminalGUI:
         top = tk.Toplevel(self.root)
         top.title("AI Thinking")
         top.geometry("700x500")
-        top.configure(bg=Styles.COLOR_BACKGROUND)
+        top.configure(bg=self.styles.COLOR_BACKGROUND)
 
         txt = scrolledtext.ScrolledText(
             top,
             wrap=tk.WORD,
-            font=Styles.FONT_NORMAL,
-            bg=Styles.COLOR_BACKGROUND,
-            fg=Styles.COLOR_FOREGROUND,
-            selectbackground=Styles.COLOR_SELECTION,
+            font=self.styles.FONT_NORMAL,
+            bg=self.styles.COLOR_BACKGROUND,
+            fg=self.styles.COLOR_FOREGROUND,
+            selectbackground=self.styles.COLOR_SELECTION,
             borderwidth=0,
             highlightthickness=0,
             padx=10,
@@ -603,7 +782,7 @@ class NeuralTerminalGUI:
         txt.configure(state=tk.NORMAL)
 
         # Create markdown renderer for thinking window
-        thinking_renderer = MarkdownRenderer(txt)
+        thinking_renderer = MarkdownRenderer(txt, self.styles)
 
         # Chain-of-thought
         if data["reasoning"]:
@@ -638,6 +817,7 @@ class NeuralTerminalGUI:
                     self._append(item["shell_err"].rstrip(), tag="error")
                 elif "content" in item:
                     # Use markdown rendering for agent responses
+
                     self._append_markdown(item["content"])
                     self.text.configure(state=tk.NORMAL)
 
@@ -645,14 +825,14 @@ class NeuralTerminalGUI:
                     link = tk.Label(
                         self.text,
                         text="Show Thinking",
-                        font=Styles.FONT_SMALL_LINK,
-                        fg=Styles.COLOR_PURPLE,
-                        bg=Styles.COLOR_BACKGROUND,
+                        font=self.styles.FONT_SMALL_LINK,
+                        fg=self.styles.COLOR_PURPLE,
+                        bg=self.styles.COLOR_BACKGROUND,
                         cursor="hand2",
                     )
                     link.bind("<Button-1>", lambda e, data=item: self._show_thinking(data))
-                    link.bind("<Enter>", lambda e: e.widget.config(fg=Styles.COLOR_PINK))
-                    link.bind("<Leave>", lambda e: e.widget.config(fg=Styles.COLOR_PURPLE))
+                    link.bind("<Enter>", lambda e: e.widget.config(fg=self.styles.COLOR_PINK))
+                    link.bind("<Leave>", lambda e: e.widget.config(fg=self.styles.COLOR_PURPLE))
 
                     self.text.insert(tk.END, "  ")
                     self.text.window_create(tk.END, window=link)
@@ -672,48 +852,86 @@ class NeuralTerminalGUI:
         win.title("Preferences")
         win.transient(self.root)
         win.grab_set()
-        win.configure(bg=Styles.COLOR_BACKGROUND, padx=20, pady=15)
+        win.configure(bg=self.styles.COLOR_BACKGROUND, padx=20, pady=15)
         win.resizable(False, False)
 
         # --- Styles for widgets ---
-        label_style = {"bg": Styles.COLOR_BACKGROUND, "fg": Styles.COLOR_FOREGROUND, "font": Styles.FONT_NORMAL}
+        label_style = {"bg": self.styles.COLOR_BACKGROUND, "fg": self.styles.COLOR_FOREGROUND, "font": self.styles.FONT_NORMAL}
         entry_style = {
-            "bg": Styles.COLOR_SELECTION, "fg": Styles.COLOR_FOREGROUND, "font": Styles.FONT_NORMAL,
-            "relief": tk.FLAT, "highlightthickness": 0, "insertbackground": Styles.COLOR_FOREGROUND,
+            "bg": self.styles.COLOR_SELECTION, "fg": self.styles.COLOR_FOREGROUND, "font": self.styles.FONT_NORMAL,
+            "relief": tk.FLAT, "highlightthickness": 0, "insertbackground": self.styles.COLOR_FOREGROUND,
         }
 
         # --- Provider ---
         tk.Label(win, text="Provider", **label_style).grid(row=0, column=0, sticky="w", pady=(0, 5))
-        provider_var = tk.StringVar(value=config.agent.provider)
+        provider_var = tk.StringVar(value=self.config.agent.provider)
         provider_menu = tk.OptionMenu(win, provider_var, "openai", "google", "openrouter", "together")
         provider_menu.config(
-            bg=Styles.COLOR_SELECTION, fg=Styles.COLOR_FOREGROUND, activebackground=Styles.COLOR_SELECTION,
-            activeforeground=Styles.COLOR_FOREGROUND, relief=tk.FLAT, highlightthickness=0, width=25,
+            bg=self.styles.COLOR_SELECTION, fg=self.styles.COLOR_FOREGROUND, activebackground=self.styles.COLOR_SELECTION,
+            activeforeground=self.styles.COLOR_FOREGROUND, relief=tk.FLAT, highlightthickness=0, width=25,
             direction="below", borderwidth=0,
         )
         provider_menu["menu"].config(
-            bg=Styles.COLOR_BACKGROUND, fg=Styles.COLOR_FOREGROUND,
-            activebackground=Styles.COLOR_SELECTION, activeforeground=Styles.COLOR_PINK, relief=tk.FLAT,
+            bg=self.styles.COLOR_BACKGROUND, fg=self.styles.COLOR_FOREGROUND,
+            activebackground=self.styles.COLOR_SELECTION, activeforeground=self.styles.COLOR_PINK, relief=tk.FLAT,
         )
         provider_menu.grid(row=0, column=1, sticky="ew", pady=(0, 10))
 
         # --- Model ---
         tk.Label(win, text="Model", **label_style).grid(row=1, column=0, sticky="w", pady=(0, 5))
-        model_var = tk.StringVar(value=config.agent.model)
+        model_var = tk.StringVar(value=self.config.agent.model)
         tk.Entry(win, textvariable=model_var, width=30, **entry_style).grid(row=1, column=1, pady=(0, 10))
 
         # --- API Key ---
         tk.Label(win, text="API Key", **label_style).grid(row=2, column=0, sticky="w", pady=(0, 5))
         key_var = tk.StringVar()
-        tk.Entry(win, textvariable=key_var, show="•", width=30, **entry_style).grid(row=2, column=1, pady=(0, 15))
+        tk.Entry(win, textvariable=key_var, show="•", width=30, **entry_style).grid(row=2, column=1, pady=(0, 10))
+
+        # --- Theme Selection ---
+        tk.Label(win, text="Theme", **label_style).grid(row=3, column=0, sticky="w", pady=(0, 5))
+        theme_var = tk.StringVar(value=self.config.ui.theme)
+        
+        # Create theme dropdown with descriptive names
+        theme_options = []
+        theme_mapping = {}
+        for theme_key in ThemeManager.get_theme_names():
+            theme_info = ThemeManager.get_theme_info(theme_key)
+            display_name = f"{theme_info['name']}"
+            theme_options.append(display_name)
+            theme_mapping[display_name] = theme_key
+        
+        current_theme_info = ThemeManager.get_theme_info(self.config.ui.theme)
+        current_display_name = current_theme_info['name']
+        theme_var.set(current_display_name)
+        
+        theme_menu = tk.OptionMenu(win, theme_var, *theme_options)
+        theme_menu.config(
+            bg=self.styles.COLOR_SELECTION, fg=self.styles.COLOR_FOREGROUND, 
+            activebackground=self.styles.COLOR_SELECTION, activeforeground=self.styles.COLOR_FOREGROUND, 
+            relief=tk.FLAT, highlightthickness=0, width=25, direction="below", borderwidth=0,
+        )
+        theme_menu["menu"].config(
+            bg=self.styles.COLOR_BACKGROUND, fg=self.styles.COLOR_FOREGROUND,
+            activebackground=self.styles.COLOR_SELECTION, activeforeground=self.styles.COLOR_PINK, relief=tk.FLAT,
+        )
+        theme_menu.grid(row=3, column=1, sticky="ew", pady=(0, 15))
 
         def _save():
-            cfg = config
+            cfg = self.config
             cfg.agent.provider = provider_var.get()
             cfg.agent.model = model_var.get()
             key = key_var.get().strip()
             if key:
                 setattr(cfg.agent, f"{provider_var.get()}_api_key", key)
+            
+            # Handle theme change
+            selected_theme_display = theme_var.get()
+            selected_theme_key = theme_mapping.get(selected_theme_display, "dracula")
+            if cfg.ui.theme != selected_theme_key:
+                cfg.ui.theme = selected_theme_key
+                self._apply_theme(selected_theme_key)
+            
+            save_config(cfg)
             self.agent = build_agent(cfg)  # hot-swap
             self._append_markdown("\n— **Preferences updated & agent restarted** —\n", tag="info")
             win.destroy()
@@ -721,11 +939,11 @@ class NeuralTerminalGUI:
         # --- Save Button ---
         save_button = tk.Button(
             win, text="Save & Restart Agent", command=_save, relief=tk.FLAT,
-            bg=Styles.COLOR_PURPLE, fg=Styles.COLOR_FOREGROUND,
-            activebackground=Styles.COLOR_PINK, activeforeground=Styles.COLOR_FOREGROUND,
-            font=Styles.FONT_NORMAL, padx=10, pady=5, borderwidth=0,
+            bg=self.styles.COLOR_PURPLE, fg=self.styles.COLOR_FOREGROUND,
+            activebackground=self.styles.COLOR_PINK, activeforeground=self.styles.COLOR_FOREGROUND,
+            font=self.styles.FONT_NORMAL, padx=10, pady=5, borderwidth=0,
         )
-        save_button.grid(row=3, column=0, columnspan=2, pady=8)
+        save_button.grid(row=4, column=0, columnspan=2, pady=8)
         win.columnconfigure(1, weight=1)
 
     def _export(self):

@@ -1,4 +1,4 @@
-# config.py - Enhanced with OpenRouter & Together AI Support
+# config.py - Enhanced with OpenRouter & Together AI Support + Theme Management
 import os
 import sqlite3
 from dataclasses import dataclass, asdict, field, fields, is_dataclass
@@ -8,7 +8,7 @@ from typing import Any
 # All settings will be stored in the same database as the agent sessions.
 DB_FILE = "tmp/data.db" 
 
-# --- Enhanced Dataclasses with new providers ---
+# --- Enhanced Dataclasses with new providers and theme support ---
 @dataclass
 class NetworkConfig:
     wifi_ssid: str = ""
@@ -38,7 +38,7 @@ class LoggingConfig:
 class UIConfig:
     show_tool_calls: bool = True
     markdown: bool = True
-    theme: str = "default"
+    theme: str = "dracula"  # 'retro', 'minimal', 'genz', 'dracula'
 
 @dataclass
 class StorageConfig:
@@ -68,7 +68,7 @@ def _get_db_conn():
     conn.commit()
     return conn
 
-# --- Enhanced `save_config` with new API keys ---
+# --- Enhanced `save_config` with new API keys and theme support ---
 def save_config(config: Config) -> bool:
     """Save configuration to the SQLite database."""
     try:
@@ -95,7 +95,7 @@ def save_config(config: Config) -> bool:
         print(f"Error saving config to database: {e}")
         return False
 
-# --- Enhanced `load_config` with migration support ---
+# --- Enhanced `load_config` with migration support and theme defaults ---
 def load_config() -> Config:
     """Load configuration from the SQLite database. Creates default if not present."""
     try:
@@ -108,7 +108,7 @@ def load_config() -> Config:
 
         if not rows:
             # No settings found, create and save the default config
-            print("No configuration found in database. Creating default settings with multi-provider support.")
+            print("No configuration found in database. Creating default settings with multi-provider and theme support.")
             default_config = Config()
             # Populate keys from environment variables on first run
             default_config.agent.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -130,6 +130,18 @@ def load_config() -> Config:
             config.agent.openrouter_api_key = os.environ.get("OPENROUTER_API_KEY", "")
         if not hasattr(config.agent, 'together_api_key'):
             config.agent.together_api_key = os.environ.get("TOGETHER_API_KEY", "")
+        
+        # Migration: Handle old theme values
+        if config.ui.theme == "default":
+            config.ui.theme = "dracula"
+            save_config(config)  # Save the migrated config
+        
+        # Ensure theme is valid
+        valid_themes = ["retro", "minimal", "genz", "dracula"]
+        if config.ui.theme not in valid_themes:
+            print(f"Warning: Invalid theme '{config.ui.theme}' found, defaulting to 'dracula'")
+            config.ui.theme = "dracula"
+            save_config(config)
         
         return config
 
@@ -266,6 +278,10 @@ OPENAI_API_KEY = "{key}"
 # Google: https://makersuite.google.com/app/apikey
 # OpenRouter: https://openrouter.ai/keys
 # Together AI: https://api.together.xyz/settings/api-keys
+
+# Theme Options:
+# Available themes: retro, minimal, genz, dracula
+# Default theme: dracula
 '''
             
             CFG_FILE.write_text(settings_content)
@@ -274,10 +290,10 @@ OPENAI_API_KEY = "{key}"
             if Console:
                 console = Console()
                 console.print("[bright_green]✅ API key saved to ~/.ai-os/settings.toml[/bright_green]")
-                console.print("[dim]You can configure additional providers via the 'config' command[/dim]")
+                console.print("[dim]You can configure additional providers and themes via the 'config' command[/dim]")
             else:
                 print("✅  API key saved to ~/.ai-os/settings.toml")
-                print("    You can configure additional providers via the 'config' command")
+                print("    You can configure additional providers and themes via the 'config' command")
         else:
             if Console:
                 console = Console()
