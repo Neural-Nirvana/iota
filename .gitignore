@@ -1,4 +1,11 @@
 .env
 __pycache__
 env/
+env2/
+env3/
+build/
+dist/
+
+tmp/
+
 

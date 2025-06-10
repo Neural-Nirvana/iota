@@ -1,652 +1,1028 @@
-# main.py
+# app.py – Integrated Tk‑GUI version with Markdown Rendering and Theme Support v1.4
+"""
+A terminal based AI agent that lets you interact with any device.
+Changelog v1.4
+---------------
+* **Theme Support**: Added configurable themes (Retro, Minimal, GenZ)
+* **Dynamic Styling**: Styles now change based on selected theme
+* **Enhanced Preferences**: Theme selection in preferences dialog
+* **Live Theme Switching**: Apply theme changes without restart
+"""
+from __future__ import annotations
+
 import os
+import platform
+import queue
+import re
+import shlex
+import subprocess
 import sys
-import time
-from textwrap import dedent
+import threading
 from datetime import datetime
-from typing import Optional
-import asyncio
-import logging
+from textwrap import dedent
+from typing import Any, Dict
+
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext, simpledialog
 
 from agno.agent import Agent
+from agno.models.google import Gemini
 from agno.models.openai import OpenAIChat
-from agno.models.google import Gemini  # <-- IMPORT GEMINI
-from agno.tools.reasoning import ReasoningTools
-from agno.tools import tool
-from agno.utils.log import logger
-from agno.tools.shell import ShellTools
+from agno.models.openrouter import OpenRouter
+from agno.models.together import Together
 from agno.storage.sqlite import SqliteStorage
-import platform
 from agno.tools.file import FileTools
 from agno.tools.python import PythonTools
-
-system_information = platform.uname()
-
-# Import configuration
-try:
-    from config import load_config, create_default_config, Config
-except ImportError:
-    # Fallback if config.py is not available
-    Config = None
-    load_config = None
-
-# Try to import rich for better terminal UI
-DISABLE_RICH = os.environ.get('DISABLE_RICH', '').lower() in ('1', 'true', 'yes')
+from agno.tools.reasoning import ReasoningTools
+from agno.tools.shell import ShellTools
+from agno.utils.log import logger
 
 try:
-    if not DISABLE_RICH:
-        from rich.console import Console
-        from rich.markdown import Markdown
-        from rich.panel import Panel
-        from rich.text import Text
-        from rich.status import Status
-        from rich.prompt import Prompt, Confirm
-        from rich.table import Table
-        from rich import print as rprint
-        from rich.syntax import Syntax
-        RICH_AVAILABLE = True
-        console = Console()
-    else:
-        RICH_AVAILABLE = False
-        print("Rich UI disabled by environment variable")
+    from config import load_config, save_config
 except ImportError:
-    RICH_AVAILABLE = False
-    print("Note: Install 'rich' library for better UI experience: pip install rich")
+    print("config.py missing – create one with create_default_config() first.")
+    sys.exit(1)
 
-# Color codes for terminal if rich is not available
-class Colors:
-    HEADER = '\033[95m'
-    BLUE = '\033[94m'
-    CYAN = '\033[96m'
-    GREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
 
-class TerminalUI:
-    """Enhanced terminal UI wrapper for the agent"""
+class ThemeManager:
+    """Manages different visual themes for the terminal."""
     
-    def __init__(self, agent, config=None):
-        self.agent = agent
-        self.config = config
-        self.session_start = datetime.now()
-        self.command_history = []
-        self.command_count = 0
-        
-    def clear_screen(self):
-        """Clear the terminal screen"""
-        os.system('cls' if os.name == 'nt' else 'clear')
+    THEMES = {
+        "retro": {
+            "name": "Retro Terminal",
+            "description": "Classic green-on-black terminal vibes",
+            "colors": {
+                "background": "#000000",
+                "foreground": "#00ff00",
+                "comment": "#00aa00",
+                "cyan": "#00ffff",
+                "green": "#00ff00",
+                "pink": "#ff00ff",
+                "purple": "#aa00aa",
+                "red": "#ff0000",
+                "orange": "#ffaa00",
+                "yellow": "#ffff00",
+                "selection": "#333333",
+                "code_bg": "#111111",
+                "quote_bg": "#0a0a0a",
+            }
+        },
+        "minimal": {
+            "name": "Minimal Clean",
+            "description": "Clean, professional black and white",
+            "colors": {
+                "background": "#1a1a1a",
+                "foreground": "#e0e0e0",
+                "comment": "#808080",
+                "cyan": "#b0b0b0",
+                "green": "#d0d0d0",
+                "pink": "#c0c0c0",
+                "purple": "#a0a0a0",
+                "red": "#ff6b6b",
+                "orange": "#ffa500",
+                "yellow": "#ffeb3b",
+                "selection": "#404040",
+                "code_bg": "#2a2a2a",
+                "quote_bg": "#252525",
+            }
+        },
+        "genz": {
+            "name": "GenZ Vibes",
+            "description": "Bright, vibrant neon colors",
+            "colors": {
+                "background": "#0d1117",
+                "foreground": "#f0f6fc",
+                "comment": "#7c3aed",
+                "cyan": "#00d4aa",
+                "green": "#39ff14",
+                "pink": "#ff007f",
+                "purple": "#bf00ff",
+                "red": "#ff073a",
+                "orange": "#ff8c00",
+                "yellow": "#ffff00",
+                "selection": "#21262d",
+                "code_bg": "#161b22",
+                "quote_bg": "#0d1117",
+            }
+        },
+        "dracula": {
+            "name": "Dracula Classic",
+            "description": "The classic Dracula theme",
+            "colors": {
+                "background": "#282a36",
+                "foreground": "#f8f8f2",
+                "comment": "#6272a4",
+                "cyan": "#8be9fd",
+                "green": "#50fa7b",
+                "pink": "#ff79c6",
+                "purple": "#bd93f9",
+                "red": "#ff5555",
+                "orange": "#ffb86c",
+                "yellow": "#f1fa8c",
+                "selection": "#44475a",
+                "code_bg": "#44475a",
+                "quote_bg": "#383a45",
+            }
+        }
+    }
     
-    def show_banner(self):
-        """Display welcome banner"""
-        self.clear_screen()
-        
-        banner = """
-    ██████████████████████████████████████████████████
-    ██                                              ██
-    ██    ┌─────┐  ████████ ██  ██ ████████         ██
-    ██    │ ◉ ◉ │    ██     ██  ██ ██               ██
-    ██    │  >  │    ██     ██████ ████             ██
-    ██    └─────┘    ██     ██  ██ ██               ██
-    ██               ██     ██  ██ ████████         ██
-    ██                                              ██
-    ██      █████╗ ██╗       ██████╗ ███████╗       ██
-    ██     ██╔══██╗██║      ██╔═══██╗██╔════╝       ██
-    ██     ███████║██║      ██║   ██║███████╗       ██
-    ██     ██╔══██║██║      ██║   ██║╚════██║       ██
-    ██     ██║  ██║██║      ╚██████╔╝███████║       ██
-    ██     ╚═╝  ╚═╝╚═╝       ╚═════╝ ╚══════╝       ██
-    ██                                              ██
-    ██    ╔═══════════════════════════════════════╗ ██
-    ██    ║ For Tinkerers and Builders            ║ ██
-    ██    ╚═══════════════════════════════════════╝ ██
-    ██                                              ██
-    ██████████████████████████████████████████████████
-        """
-        
-        if RICH_AVAILABLE:
-            console.print(Panel(banner, style="bold cyan"))
-            console.print(platform.machine()+', '+ platform.processor()+', '+ platform.release()+', '+ platform.version())
-            console.print("[dim]Type 'help' for commands, 'exit' to quit[/dim]\n")
-        else:
-            print(Colors.CYAN + banner + Colors.ENDC)
-            print(platform.uname())
-            print(Colors.BLUE + "Type 'help' for commands, 'exit' to quit\n" + Colors.ENDC)
+    @classmethod
+    def get_theme_names(cls) -> list[str]:
+        """Get list of available theme names."""
+        return list(cls.THEMES.keys())
     
-    def show_help(self):
-        """Display help information"""
-        help_text = """
-Available Commands:
-• help       - Show this help message
-• clear      - Clear the screen
-• history    - Show command history
-• stats      - Show session statistics
-• export     - Export conversation to file
-• config     - Configure application settings
-• reset      - Start a new session
-• exit/quit  - Exit the application
+    @classmethod
+    def get_theme_colors(cls, theme_name: str) -> Dict[str, str]:
+        """Get color palette for a specific theme."""
+        return cls.THEMES.get(theme_name, cls.THEMES["dracula"])["colors"]
+    
+    @classmethod
+    def get_theme_info(cls, theme_name: str) -> Dict[str, str]:
+        """Get theme name and description."""
+        theme = cls.THEMES.get(theme_name, cls.THEMES["dracula"])
+        return {
+            "name": theme["name"],
+            "description": theme["description"]
+        }
 
-Special Prefixes:
-• !<command> - Execute shell command directly
-• ?<query>   - Quick system info query
 
-Tips:
-• Ask about system configuration, processes, network, files, etc.
-• The assistant can execute commands and analyze results
-• Use natural language for complex queries
-        """
-        
-        if RICH_AVAILABLE:
-            console.print(Panel(help_text, title="Help", style="green"))
-        else:
-            print(Colors.GREEN + "=== HELP ===" + Colors.ENDC)
-            print(help_text)
+class Styles:
+    """A collection of style constants for the GUI - now theme-aware."""
+
+    FONT_FAMILY = ("Fira Code", "Consolas", "Courier New")
+    FONT_SIZE_NORMAL = 11
+    FONT_SIZE_SMALL = 10
+    FONT_SIZE_LARGE = 14
+    FONT_SIZE_XLARGE = 16
+    FONT_NORMAL = (FONT_FAMILY, FONT_SIZE_NORMAL)
+    FONT_BOLD = (FONT_FAMILY, FONT_SIZE_NORMAL, "bold")
+    FONT_ITALIC = (FONT_FAMILY, FONT_SIZE_NORMAL, "italic")
+    FONT_BOLD_ITALIC = (FONT_FAMILY, FONT_SIZE_NORMAL, "bold", "italic")
+    FONT_SMALL_LINK = (FONT_FAMILY, FONT_SIZE_SMALL, "underline")
+    FONT_CODE = ("Courier New", FONT_SIZE_NORMAL)
+    FONT_H1 = (FONT_FAMILY, FONT_SIZE_XLARGE, "bold")
+    FONT_H2 = (FONT_FAMILY, FONT_SIZE_LARGE, "bold")
+    FONT_H3 = (FONT_FAMILY, FONT_SIZE_NORMAL, "bold")
+
+    def __init__(self, theme_name: str = "dracula"):
+        """Initialize styles with a specific theme."""
+        self.update_theme(theme_name)
     
-    def show_stats(self):
-        """Display session statistics"""
-        duration = datetime.now() - self.session_start
-        stats = f"""
-Session Statistics:
-• Session Duration: {duration}
-• Commands Executed: {self.command_count}
-• Session Started: {self.session_start.strftime('%Y-%m-%d %H:%M:%S')}
-        """
+    def update_theme(self, theme_name: str):
+        """Update color scheme based on theme."""
+        colors = ThemeManager.get_theme_colors(theme_name)
         
-        if RICH_AVAILABLE:
-            table = Table(title="Session Statistics")
-            table.add_column("Metric", style="cyan")
-            table.add_column("Value", style="green")
-            table.add_row("Session Duration", str(duration))
-            table.add_row("Commands Executed", str(self.command_count))
-            table.add_row("Session Started", self.session_start.strftime('%Y-%m-%d %H:%M:%S'))
-            console.print(table)
-        else:
-            print(Colors.CYAN + stats + Colors.ENDC)
+        self.COLOR_BACKGROUND = colors["background"]
+        self.COLOR_FOREGROUND = colors["foreground"]
+        self.COLOR_COMMENT = colors["comment"]
+        self.COLOR_CYAN = colors["cyan"]
+        self.COLOR_GREEN = colors["green"]
+        self.COLOR_PINK = colors["pink"]
+        self.COLOR_PURPLE = colors["purple"]
+        self.COLOR_RED = colors["red"]
+        self.COLOR_ORANGE = colors["orange"]
+        self.COLOR_YELLOW = colors["yellow"]
+        self.COLOR_SELECTION = colors["selection"]
+        self.COLOR_CODE_BG = colors["code_bg"]
+        self.COLOR_QUOTE_BG = colors["quote_bg"]
+
+
+class MarkdownRenderer:
+    """Renders markdown text in a tkinter Text widget with proper formatting."""
     
-    def show_history(self):
-        """Display command history"""
-        if not self.command_history:
-            print("No commands in history yet.")
-            return
+    def __init__(self, text_widget, styles):
+        self.text = text_widget
+        self.styles = styles
+        self._setup_tags()
+    
+    def _setup_tags(self):
+        """Configure text tags for different markdown elements."""
+        # Headers
+        self.text.tag_configure("h1", font=self.styles.FONT_H1, foreground=self.styles.COLOR_PINK, spacing1=10, spacing3=5)
+        self.text.tag_configure("h2", font=self.styles.FONT_H2, foreground=self.styles.COLOR_PURPLE, spacing1=8, spacing3=4)
+        self.text.tag_configure("h3", font=self.styles.FONT_H3, foreground=self.styles.COLOR_CYAN, spacing1=6, spacing3=3)
         
-        if RICH_AVAILABLE:
-            table = Table(title="Command History")
-            table.add_column("#", style="dim", width=4)
-            table.add_column("Time", style="cyan")
-            table.add_column("Command", style="white")
+        # Text styles
+        self.text.tag_configure("bold", font=self.styles.FONT_BOLD, foreground=self.styles.COLOR_FOREGROUND)
+        self.text.tag_configure("italic", font=self.styles.FONT_ITALIC, foreground=self.styles.COLOR_FOREGROUND)
+        self.text.tag_configure("bold_italic", font=self.styles.FONT_BOLD_ITALIC, foreground=self.styles.COLOR_FOREGROUND)
+        
+        # Code
+        self.text.tag_configure("code", font=self.styles.FONT_CODE, foreground=self.styles.COLOR_ORANGE, 
+                               background=self.styles.COLOR_CODE_BG, borderwidth=1, relief="solid")
+        self.text.tag_configure("code_block", font=self.styles.FONT_CODE, foreground=self.styles.COLOR_GREEN,
+                               background=self.styles.COLOR_CODE_BG, lmargin1=20, lmargin2=20, 
+                               spacing1=5, spacing3=5, borderwidth=1, relief="solid")
+        
+        # Lists
+        self.text.tag_configure("list_item", lmargin1=20, lmargin2=40, spacing1=2)
+        self.text.tag_configure("bullet", foreground=self.styles.COLOR_PINK, font=self.styles.FONT_BOLD)
+        
+        # Quotes
+        self.text.tag_configure("quote", lmargin1=20, lmargin2=20, foreground=self.styles.COLOR_COMMENT,
+                               background=self.styles.COLOR_QUOTE_BG, font=self.styles.FONT_ITALIC, 
+                               spacing1=5, spacing3=5, borderwidth=1, relief="solid")
+        
+        # Links
+        self.text.tag_configure("link", foreground=self.styles.COLOR_CYAN, underline=True)
+        
+        # Default
+        self.text.tag_configure("normal", foreground=self.styles.COLOR_FOREGROUND, font=self.styles.FONT_NORMAL)
+    
+    def update_theme(self, styles):
+        """Update markdown renderer with new theme styles."""
+        self.styles = styles
+        self._setup_tags()
+    
+    def render(self, markdown_text: str):
+        """Parse and render markdown text in the text widget."""
+        lines = markdown_text.split('\n')
+        i = 0
+        
+        while i < len(lines):
+            line = lines[i]
             
-            for i, (timestamp, cmd) in enumerate(self.command_history, 1):
-                table.add_row(str(i), timestamp, cmd[:60] + "..." if len(cmd) > 60 else cmd)
-            
-            console.print(table)
-        else:
-            print(Colors.BOLD + "Command History:" + Colors.ENDC)
-            for i, (timestamp, cmd) in enumerate(self.command_history, 1):
-                print(f"{i}. [{timestamp}] {cmd}")
-    
-    def export_conversation(self):
-        """Export conversation to a file"""
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        
-        # Use configured export directory or default
-        export_dir = "exports"
-        if self.config and hasattr(self.config.storage, 'export_dir'):
-            export_dir = self.config.storage.export_dir
-        
-        os.makedirs(export_dir, exist_ok=True)
-        filename = os.path.join(export_dir, f"conversation_{timestamp}.md")
-        
-        try:
-            # BUG: This is a placeholder. A real implementation would query the agent's
-            # storage (e.g., the SQLite DB) to get the full conversation.
-            with open(filename, 'w') as f:
-                f.write(f"# System Intelligence Terminal Assistant\n")
-                f.write(f"## Session: {self.session_start.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-                f.write("### Command History\n\n")
-                for timestamp, cmd in self.command_history:
-                    f.write(f"**[{timestamp}]** {cmd}\n\n")
-            
-            success_msg = f"Conversation exported to: {filename}"
-            if RICH_AVAILABLE:
-                console.print(f"[green]✓[/green] {success_msg}")
-            else:
-                print(Colors.GREEN + "✓ " + success_msg + Colors.ENDC)
-        except Exception as e:
-            error_msg = f"Failed to export: {str(e)}"
-            if RICH_AVAILABLE:
-                console.print(f"[red]✗[/red] {error_msg}")
-            else:
-                print(Colors.FAIL + "✗ " + error_msg + Colors.ENDC)
-    
-    def process_special_command(self, user_input: str) -> Optional[str]:
-        """Process special commands and prefixes"""
-        if user_input.startswith('!'):
-            shell_cmd = user_input[1:].strip()
-            return f"Execute this shell command and show the results: {shell_cmd}"
-        
-        elif user_input.startswith('?'):
-            query = user_input[1:].strip()
-            return f"Quick system check: {query}"
-        
-        return None
-    
-    def get_user_input(self) -> str:
-        """Get input from user with enhanced prompt"""
-        if RICH_AVAILABLE:
-            prompt_text = f"[bold cyan]agent[{self.command_count + 1}][/bold cyan]> "
-            return Prompt.ask(prompt_text)
-        else:
-            return input(f"{Colors.CYAN}agent[{self.command_count + 1}]>{Colors.ENDC} ")
-    
-    def display_thinking(self):
-        """Show thinking indicator"""
-        if not RICH_AVAILABLE:
-            print(Colors.BLUE + "🤔 Thinking..." + Colors.ENDC)
-
-    def show_config_menu(self):
-        """Display and manage configuration settings"""
-        from config import load_config, save_config, Config, NetworkConfig, AgentConfig
-        
-        config = load_config()
-        
-        while True:
-            self.clear_screen()
-            
-            if RICH_AVAILABLE:
-                console.print(Panel("[bold cyan]Configuration Menu[/bold cyan]"))
-                
-                table = Table(show_header=True, header_style="bold magenta")
-                table.add_column("#", style="dim", width=3)
-                table.add_column("Setting", style="bold")
-                table.add_column("Value", style="cyan")
-                
-                table.add_row("", "[yellow bold]Agent Settings[/yellow bold]", "")
-                table.add_row("1", "AI Provider", config.agent.provider.capitalize())
-                table.add_row("2", "Model", config.agent.model)
-                table.add_row("3", "Temperature", str(config.agent.temperature))
-                table.add_row("4", "Max Tokens", str(config.agent.max_tokens))
-                table.add_row("5", "Set OpenAI API Key", "****" + config.agent.openai_api_key[-4:] if config.agent.openai_api_key else "[italic](Not set)[/italic]")
-                table.add_row("6", "Set Google API Key", "****" + config.agent.google_api_key[-4:] if config.agent.google_api_key else "[italic](Not set)[/italic]")
-
-                table.add_row("", "[yellow bold]UI Settings[/yellow bold]", "")
-                table.add_row("7", "Show Tool Calls", str(config.ui.show_tool_calls))
-                table.add_row("8", "Enable Markdown", str(config.ui.markdown))
-
-                console.print(table)
-                console.print("\n[dim]Enter setting number to change, 'save' to apply, or 'exit' to discard changes.[/dim]")
-            else:
-                print(Colors.HEADER + "Configuration Menu" + Colors.ENDC + "\n")
-                # Simplified non-rich version
-                print("1. AI Provider: ", config.agent.provider.capitalize())
-                print("2. Model: ", config.agent.model)
-                # ... and so on
-                print("\nEnter setting number to change, or 'save' to save and exit, or 'exit' to exit without saving")
-
-            
-            choice = input("\nChoice: ").strip().lower()
-            
-            if choice == 'exit':
-                return
-            elif choice == 'save':
-                if save_config(config):
-                    if RICH_AVAILABLE:
-                        console.print("[green]Configuration saved successfully! Please restart the application for all changes to take effect.[/green]")
-                    else:
-                        print(Colors.GREEN + "Configuration saved successfully! Please restart the application." + Colors.ENDC)
-                    time.sleep(2)
-                    return
-                else:
-                    if RICH_AVAILABLE:
-                        console.print("[red]Error saving configuration[/red]")
-                    else:
-                        print(Colors.FAIL + "Error saving configuration" + Colors.ENDC)
-                    time.sleep(1.5)
-            elif choice.isdigit():
-                option = int(choice)
-                
-                # Agent settings
-                if option == 1: # AI Provider
-                    providers = ["openai", "google"]
-                    current_provider_index = providers.index(config.agent.provider) if config.agent.provider in providers else 0
-                    choice = self._get_choice("Select AI Provider", providers, default=str(current_provider_index + 1))
-                    if choice.isdigit() and 1 <= int(choice) <= len(providers):
-                        new_provider = providers[int(choice)-1]
-                        if new_provider != config.agent.provider:
-                            config.agent.provider = new_provider
-                            # Reset model to a default for the new provider
-                            if new_provider == "openai":
-                                config.agent.model = "gpt-4o-mini"
-                            elif new_provider == "google":
-                                config.agent.model = "gemini-2.5-flash-preview-04-17"
-                            console.print(f"[yellow]Provider changed to '{new_provider}'. Model reset to '{config.agent.model}'.[/yellow]")
-                            time.sleep(1.5)
-
-                elif option == 2: # Model
-                    if config.agent.provider == "openai":
-                        models = ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-3.5-turbo"]
-                    elif config.agent.provider == "google":
-                        models = ["gemini-2.5-flash-preview-04-17", "gemini-2.5-pro"]
-                    else:
-                        console.print("[red]Unknown provider configured. Cannot select model.[/red]")
-                        time.sleep(1.5)
-                        continue
-                    
-                    default_index = models.index(config.agent.model) + 1 if config.agent.model in models else 1
-                    choice = self._get_choice(f"Select a {config.agent.provider.capitalize()} model", models, default=str(default_index))
-                    if choice.isdigit() and 1 <= int(choice) <= len(models):
-                        config.agent.model = models[int(choice)-1]
-
-                elif option == 3:
-                    config.agent.temperature = self._get_float("Enter Temperature (0.0-1.0): ", config.agent.temperature)
-                elif option == 4:
-                    config.agent.max_tokens = self._get_int("Enter Max Tokens: ", config.agent.max_tokens)
-                elif option == 5:
-                    config.agent.openai_api_key = self._get_password("Enter OpenAI API Key: ")
-                elif option == 6:
-                    config.agent.google_api_key = self._get_password("Enter Google API Key: ")
-                
-                # UI settings
-                elif option == 7:
-                    config.ui.show_tool_calls = self._get_boolean("Show Tool Calls? (y/n): ", config.ui.show_tool_calls)
-                elif option == 8:
-                    config.ui.markdown = self._get_boolean("Enable Markdown? (y/n): ", config.ui.markdown)
-    
-    def _get_choice(self, prompt, options, default="1"):
-        """Helper to get a choice from a list."""
-        if RICH_AVAILABLE:
-            console.print(f"\n[bold]{prompt}[/bold]")
-            for i, option in enumerate(options):
-                console.print(f"  {i+1}. {option}")
-            return Prompt.ask("Select an option", default=default)
-        else:
-            print(f"\n{prompt}")
-            for i, option in enumerate(options):
-                print(f"  {i+1}. {option}")
-            return input(f"Select an option [{default}]: ") or default
-
-    def _get_input(self, prompt, default=None):
-        """Get user input with optional default value"""
-        if RICH_AVAILABLE:
-            return Prompt.ask(prompt, default=default or "")
-        else:
-            default_display = f" [{default}]" if default else ""
-            user_input = input(f"{prompt}{default_display}: ")
-            return user_input if user_input.strip() else default
-    
-    def _get_password(self, prompt):
-        """Get password input without echo"""
-        import getpass
-        try:
-            return getpass.getpass(prompt)
-        except:
-            if RICH_AVAILABLE:
-                return Prompt.ask(prompt, password=True)
-            else:
-                return input(f"{prompt} (note: input will be visible): ")
-    
-    def _get_boolean(self, prompt, default=False):
-        """Get boolean input"""
-        if RICH_AVAILABLE:
-            return Confirm.ask(prompt, default=default)
-        else:
-            default_display = "Y/n" if default else "y/N"
-            user_input = input(f"{prompt} [{default_display}]: ").strip().lower()
-            if not user_input:
-                return default
-            return user_input.startswith('y')
-    
-    def _get_int(self, prompt, default=0):
-        """Get integer input"""
-        while True:
-            try:
-                if RICH_AVAILABLE:
-                    user_input = Prompt.ask(prompt, default=str(default))
-                else:
-                    user_input = input(f"{prompt} [{default}]: ")
-                    if not user_input:
-                        return default
-                return int(user_input)
-            except ValueError:
-                if RICH_AVAILABLE:
-                    console.print("[red]Please enter a valid number[/red]")
-                else:
-                    print(Colors.FAIL + "Please enter a valid number" + Colors.ENDC)
-    
-    def _get_float(self, prompt, default=0.0):
-        """Get float input"""
-        while True:
-            try:
-                if RICH_AVAILABLE:
-                    user_input = Prompt.ask(prompt, default=str(default))
-                else:
-                    user_input = input(f"{prompt} [{default}]: ")
-                    if not user_input:
-                        return default
-                return float(user_input)
-            except ValueError:
-                if RICH_AVAILABLE:
-                    console.print("[red]Please enter a valid number[/red]")
-                else:
-                    print(Colors.FAIL + "Please enter a valid number" + Colors.ENDC)
-    
-    def run(self):
-        """Main run loop with enhanced UI"""
-        self.show_banner()
-        exit_banner = """
-        
-    ████████████████████████████████████████████████████████
-    █                                                      █
-    █     ┌─────┐    ╔══════════════════════════════════╗  █
-    █     │ ◉ ◉ │    ║                                  ║  █
-    █     │  ∩  │ ~  ║  Thanks for using AI OS!         ║  █
-    █     │ \o/ │    ║  Keep building amazing things!   ║  █
-    █     └─────┘    ║                                  ║  █
-    █                ╚══════════════════════════════════╝  █
-    █                                                      █
-    █   ██████╗ ██╗   ██╗███████╗██╗██╗                    █
-    █   ██╔══██╗╚██╗ ██╔╝██╔════╝██║██║                    █
-    █   ██████╔╝ ╚████╔╝ █████╗  ██║██║                    █
-    █   ██╔══██╗  ╚██╔╝  ██╔══╝  ╚═╝╚═╝                    █
-    █   ██████╔╝   ██║   ███████╗██╗██╗                    █
-    █   ╚═════╝    ╚═╝   ╚══════╝╚═╝╚═╝                    █
-    █                                                      █
-    ████████████████████████████████████████████████████████
-        """
-        
-        while True:
-            try:
-                user_input = self.get_user_input().strip()
-                
-                if not user_input:
-                    continue
-                
-                timestamp = datetime.now().strftime('%H:%M:%S')
-                self.command_history.append((timestamp, user_input))
-                self.command_count += 1
-                
-                # Handle special commands
-                if user_input.lower() in ['exit', 'quit', 'q']:
-                    if RICH_AVAILABLE:
-                        if Confirm.ask("\n[yellow]Are you sure you want to exit?[/yellow]"):
-                            console.print("\n[cyan]👋 Goodbye! Thanks for using AI OS.[/cyan]")
-                            console.print(Panel(exit_banner), style="purple")
-                            break
-                    else:
-                        confirm = input(Colors.WARNING + "\nAre you sure you want to exit? (y/n): " + Colors.ENDC)
-                        if confirm.lower() == 'y':
-                            print(Colors.CYAN + "\n👋 Goodbye! Thanks for using AI OS." + Colors.ENDC)
-                            break
-                    continue
-                
-                elif user_input.lower() == 'help':
-                    self.show_help()
-                    continue
-
-                elif user_input.lower() == 'config':
-                    self.show_config_menu()
-                    # After config, we should reload the agent, but for now we just show the menu.
-                    # A full implementation would require restarting or re-initializing the agent.
-                    console.print("[yellow]Please restart the application for configuration changes to take full effect.[/yellow]")
-                    continue
-                
-                elif user_input.lower() == 'clear':
-                    self.clear_screen()
-                    continue
-                
-                elif user_input.lower() == 'history':
-                    self.show_history()
-                    continue
-                
-                elif user_input.lower() == 'stats':
-                    self.show_stats()
-                    continue
-                
-                elif user_input.lower() == 'export':
-                    self.export_conversation()
-                    continue
-                
-                elif user_input.lower() == 'reset':
-                    if RICH_AVAILABLE and Confirm.ask("[yellow]Start a new session? This will clear history.[/yellow]"):
-                        self.command_history.clear()
-                        self.command_count = 0
-                        self.session_start = datetime.now()
-                        self.clear_screen()
-                        self.show_banner()
-                    continue
-                
-                processed_input = self.process_special_command(user_input)
-                if processed_input:
-                    user_input = processed_input
-                
-                with console.status("[bold cyan]Processing your request...[/bold cyan]", spinner="dots"):
-                    time.sleep(0.1)
-                
-                print()
-                self.agent.print_response(user_input)
-                print()
-                
-            except KeyboardInterrupt:
-                print("\n\nUse 'exit' command to quit properly.")
+            # Skip empty lines
+            if not line.strip():
+                self.text.insert(tk.END, "\n")
+                i += 1
                 continue
-            except Exception as e:
-                error_msg = f"Error: {str(e)}"
-                if RICH_AVAILABLE:
-                    console.print(f"\n[red]✗[/red] {error_msg}")
-                else:
-                    print(Colors.FAIL + f"\n✗ {error_msg}" + Colors.ENDC)
-                logger.error(f"Error in main loop: {e}", exc_info=True)
-
-def main():
-    """Main entry point"""
-    try:
-        config = None
-        if load_config:
-            # create_default_config()
-            config = load_config()
             
-            os.makedirs(os.path.dirname(config.logging.file), exist_ok=True)
-            logging.basicConfig(
-                level=getattr(logging, config.logging.level.upper(), logging.INFO),
-                format=config.logging.format,
-                handlers=[
-                    logging.FileHandler(config.logging.file),
-                    logging.StreamHandler()
-                ]
-            )
+            # Code blocks
+            if line.strip().startswith('```'):
+                i = self._render_code_block(lines, i)
+                continue
+            
+            # Headers
+            if line.startswith('#'):
+                self._render_header(line)
+                i += 1
+                continue
+            
+            # Blockquotes
+            if line.strip().startswith('>'):
+                i = self._render_blockquote(lines, i)
+                continue
+            
+            # Lists
+            if re.match(r'^\s*[-*+]\s+', line) or re.match(r'^\s*\d+\.\s+', line):
+                i = self._render_list(lines, i)
+                continue
+            
+            # Regular paragraph
+            self._render_paragraph(line)
+            i += 1
         
-        os.makedirs("tmp", exist_ok=True)
-        os.makedirs("logs", exist_ok=True)
-        os.makedirs("exports", exist_ok=True)
+        self.text.insert(tk.END, "\n")
+    
+    def _render_header(self, line: str):
+        """Render header line."""
+        match = re.match(r'^(#{1,3})\s*(.*)', line)
+        if match:
+            level = len(match.group(1))
+            text = match.group(2)
+            tag = f"h{level}"
+            self.text.insert(tk.END, text + "\n", tag)
+    
+    def _render_code_block(self, lines: list, start_idx: int) -> int:
+        """Render code block and return next line index."""
+        # Find the closing ```
+        end_idx = start_idx + 1
+        while end_idx < len(lines) and not lines[end_idx].strip().startswith('```'):
+            end_idx += 1
         
-        # ======== DYNAMIC MODEL INITIALIZATION ========
-        model_instance = None
-        agent_config = config.agent
-
-        if agent_config.provider == "openai":
-            api_key = agent_config.openai_api_key or os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                print(Colors.FAIL + "Error: OpenAI API key not found in config or OPENAI_API_KEY environment variable." + Colors.ENDC)
-                print("Please run 'python main.py', enter 'config', and set your key.")
-                sys.exit(1)
-            model_instance = OpenAIChat(
-                id=agent_config.model,
-                api_key=api_key,
-                temperature=agent_config.temperature,
-                max_tokens=agent_config.max_tokens
-            )
-        elif agent_config.provider == "google":
-            api_key = agent_config.google_api_key or os.getenv("GOOGLE_API_KEY")
-            if not api_key:
-                print(Colors.FAIL + "Error: Google API key not found in config or GOOGLE_API_KEY environment variable." + Colors.ENDC)
-                print("Please run 'python main.py', enter 'config', and set your key.")
-                sys.exit(1)
-            model_instance = Gemini(
-                id=agent_config.model,
-                api_key=api_key,
-                temperature=agent_config.temperature,
-                # max_tokens=agent_config.max_tokens
-            )
-        else:
-            print(f"{Colors.FAIL}Error: Unknown AI provider '{agent_config.provider}' in configuration.{Colors.ENDC}")
-            sys.exit(1)
+        # Extract code content
+        code_lines = lines[start_idx + 1:end_idx]
+        code_text = '\n'.join(code_lines)
         
-        # ===============================================
+        if code_text.strip():
+            self.text.insert(tk.END, code_text + "\n", "code_block")
+        
+        return end_idx + 1
+    
+    def _render_blockquote(self, lines: list, start_idx: int) -> int:
+        """Render blockquote and return next line index."""
+        quote_lines = []
+        i = start_idx
+        
+        while i < len(lines):
+            line = lines[i]
+            if line.strip().startswith('>'):
+                # Remove the > and any following space
+                quote_text = re.sub(r'^\s*>\s?', '', line)
+                quote_lines.append(quote_text)
+                i += 1
+            elif not line.strip():  # Empty line continues the quote
+                quote_lines.append('')
+                i += 1
+            else:
+                break
+        
+        quote_text = '\n'.join(quote_lines)
+        if quote_text.strip():
+            self.text.insert(tk.END, quote_text + "\n", "quote")
+        
+        return i
+    
+    def _render_list(self, lines: list, start_idx: int) -> int:
+        """Render list and return next line index."""
+        i = start_idx
+        
+        while i < len(lines):
+            line = lines[i]
+            
+            # Bullet list
+            bullet_match = re.match(r'^(\s*)([-*+])\s+(.*)', line)
+            if bullet_match:
+                indent = bullet_match.group(1)
+                bullet = bullet_match.group(2)
+                text = bullet_match.group(3)
+                
+                self.text.insert(tk.END, indent + "• ", "bullet")
+                self._render_inline_formatting(text)
+                self.text.insert(tk.END, "\n", "list_item")
+                i += 1
+                continue
+            
+            # Numbered list
+            number_match = re.match(r'^(\s*)(\d+)\.\s+(.*)', line)
+            if number_match:
+                indent = number_match.group(1)
+                number = number_match.group(2)
+                text = number_match.group(3)
+                
+                self.text.insert(tk.END, f"{indent}{number}. ", "bullet")
+                self._render_inline_formatting(text)
+                self.text.insert(tk.END, "\n", "list_item")
+                i += 1
+                continue
+            
+            # Check if this is a continuation or end of list
+            if not line.strip():
+                i += 1
+                continue
+            else:
+                break
+        
+        return i
+    
+    def _render_paragraph(self, line: str):
+        """Render a regular paragraph with inline formatting."""
+        self._render_inline_formatting(line)
+        self.text.insert(tk.END, "\n", "normal")
+    
+    def _render_inline_formatting(self, text: str):
+        """Parse and render inline formatting like bold, italic, code, links."""
+        # Regular expressions for inline formatting
+        patterns = [
+            (r'\*\*\*(.*?)\*\*\*', 'bold_italic'),  # Bold italic
+            (r'___(.*?)___', 'bold_italic'),
+            (r'\*\*(.*?)\*\*', 'bold'),  # Bold
+            (r'__(.*?)__', 'bold'),
+            (r'\*(.*?)\*', 'italic'),  # Italic
+            (r'_(.*?)_', 'italic'),
+            (r'`(.*?)`', 'code'),  # Inline code
+            (r'\[([^\]]+)\]\(([^)]+)\)', 'link'),  # Links
+        ]
+        
+        # Find all matches with their positions
+        matches = []
+        for pattern, tag in patterns:
+            for match in re.finditer(pattern, text):
+                matches.append((match.start(), match.end(), match, tag))
+        
+        # Sort matches by position
+        matches.sort(key=lambda x: x[0])
+        
+        # Render text with formatting
+        last_end = 0
+        for start, end, match, tag in matches:
+            # Add text before this match
+            if start > last_end:
+                self.text.insert(tk.END, text[last_end:start], "normal")
+            
+            # Add formatted text
+            if tag == 'link':
+                link_text = match.group(1)
+                link_url = match.group(2)
+                self.text.insert(tk.END, f"{link_text} ({link_url})", tag)
+            else:
+                formatted_text = match.group(1)
+                self.text.insert(tk.END, formatted_text, tag)
+            
+            last_end = end
+        
+        # Add remaining text
+        if last_end < len(text):
+            self.text.insert(tk.END, text[last_end:], "normal")
 
-        reasoning_agent = Agent(
-            model=model_instance,
-            tools=[ReasoningTools(add_instructions=True), ShellTools(), FileTools(), PythonTools()],
-            instructions=dedent("""\
-                system_information = {system_information}
-                You are an expert System Intelligence Teminal Assistant with strong analytical, system administration, and IoT skills! 🧠
-                
-                You are running on the user's system and have full access to analyze and manage it through shell commands. 
-                You will also be given IoT devices connected to the system to manage.
-                Your role is to:
-                1. Understand user queries and plan and execute commands appropriate for the current system and environment.
-                2. Analyze command outputs intelligently
-                3. Provide clear, actionable insights
-                4. Help with system administration, monitoring, and automation
-                
-                Always:
-                - Understand what is the current system you are working on.
-                - Be concise but thorough
-                - Explain technical concepts clearly
-                - Suggest follow-up actions when relevant
-                - Warn about potentially dangerous operations. Only move ahead if the user explicitly confirms for it.
 
-                Note:
-                - If the user asks for something which requires external connections(for eg, fetching emails from a service), come up with a plan (that can be executed from the terminal) and ask for confirmation.
-                - Once the user confirms, execute the plan. Ask for more details required from the user's end if needed.
-                - When user asks for something which requires saving data to files, name the file in a way that it is searchable and easy to understand. keep them into folder with date.
-                - If the execution output of a command is very large, save the output to a file or write a script to process the output.
-                
-                Format your responses with clear sections and use markdown for readability, colors to denote urgency and priority.
-            """),
-            add_datetime_to_instructions=True,
-            stream_intermediate_steps=config.ui.show_tool_calls,
-            show_tool_calls=config.ui.show_tool_calls,
-            markdown=config.ui.markdown,
-            storage=SqliteStorage(
-                table_name="sita_agent_sessions", 
-                db_file=config.storage.db_file
-            ),
-            add_history_to_messages=True,
-            num_history_runs=3,
+class NeuralTerminalGUI:
+    """Tkinter wrapper for the Agent with a refined look and feel."""
+
+    def __init__(self, agent: Agent):
+        self.agent = agent
+        self.config = load_config()
+        
+        # Initialize styles with current theme
+        self.styles = Styles(self.config.ui.theme)
+        
+        self.root = tk.Tk()
+        self.root.title("AIOS Neural Terminal 🌟")
+        self.root.geometry("1000x700")
+        self.root.configure(bg=self.styles.COLOR_BACKGROUND)
+
+        # Main text area
+        self.text = scrolledtext.ScrolledText(
+            self.root,
+            wrap=tk.WORD,
+            font=self.styles.FONT_NORMAL,
+            bg=self.styles.COLOR_BACKGROUND,
+            fg=self.styles.COLOR_FOREGROUND,
+            selectbackground=self.styles.COLOR_SELECTION,
+            selectforeground=self.styles.COLOR_FOREGROUND,
+            insertbackground=self.styles.COLOR_FOREGROUND,  # Cursor color
+            borderwidth=0,
+            highlightthickness=0,
+            padx=10,
+            pady=10,
+        )
+        self.text.pack(fill=tk.BOTH, expand=True)
+        self.text.configure(state=tk.DISABLED)
+
+        # Initialize markdown renderer
+        self.markdown_renderer = MarkdownRenderer(self.text, self.styles)
+
+        # Bottom input frame
+        bottom = tk.Frame(self.root, bg=self.styles.COLOR_BACKGROUND)
+        bottom.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        # Input prompt symbol
+        self.prompt_label = tk.Label(
+            bottom, text="▶", font=self.styles.FONT_BOLD, 
+            fg=self.styles.COLOR_PINK, bg=self.styles.COLOR_BACKGROUND
+        )
+        self.prompt_label.pack(side=tk.LEFT, padx=(0, 5))
+
+        # Input entry field
+        self.entry = tk.Entry(
+            bottom,
+            font=self.styles.FONT_NORMAL,
+            bg=self.styles.COLOR_BACKGROUND,
+            fg=self.styles.COLOR_FOREGROUND,
+            insertbackground=self.styles.COLOR_FOREGROUND,
+            relief=tk.FLAT,
+            highlightthickness=0,
+        )
+        self.entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.entry.bind("<Return>", self._on_enter)
+        self.entry.focus()
+
+        self._setup_menubar()
+        self.root.bind("<Control-q>", lambda _e: self.root.quit())
+
+        self.queue: queue.Queue[str] = queue.Queue()
+        self.root.after(100, self._poll_queue)
+
+        self._banner()
+        if self.agent is None:
+            self._append_markdown(
+                "⚠ **No API key configured.** Open **Edit ▸ Preferences…** to set your "
+                "provider, model and key, then click *Save & Restart Agent*.",
+                tag="error",
+            )
+            # pop the dialog automatically on first launch
+            self.root.after(100, self._prefs_dialog)
+
+        # spinner state
+        self._spinner_frames = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+        self._spinner_job = None
+        self._spinner_index = 0
+        self._spinner_mark = None
+
+    def _apply_theme(self, theme_name: str):
+        """Apply a new theme to the entire interface."""
+        self.styles.update_theme(theme_name)
+        
+        # Update root window
+        self.root.configure(bg=self.styles.COLOR_BACKGROUND)
+        
+        # Update main text area
+        self.text.configure(
+            bg=self.styles.COLOR_BACKGROUND,
+            fg=self.styles.COLOR_FOREGROUND,
+            selectbackground=self.styles.COLOR_SELECTION,
+            selectforeground=self.styles.COLOR_FOREGROUND,
+            insertbackground=self.styles.COLOR_FOREGROUND,
         )
         
-        ui = TerminalUI(reasoning_agent, config)
-        ui.run()
+        # Update prompt label
+        self.prompt_label.configure(
+            fg=self.styles.COLOR_PINK,
+            bg=self.styles.COLOR_BACKGROUND
+        )
         
-    except Exception as e:
-        logger.error(f"Fatal error: {e}", exc_info=True)
-        error_msg = f"\n{Colors.FAIL}Fatal error: {e}{Colors.ENDC}"
-        if RICH_AVAILABLE:
-            console.print(f"[red]Fatal error: {e}[/red]")
+        # Update entry field
+        self.entry.configure(
+            bg=self.styles.COLOR_BACKGROUND,
+            fg=self.styles.COLOR_FOREGROUND,
+            insertbackground=self.styles.COLOR_FOREGROUND,
+        )
+        
+        # Update markdown renderer
+        self.markdown_renderer.update_theme(self.styles)
+        
+        # Update bottom frame background
+        for widget in self.root.winfo_children():
+            if isinstance(widget, tk.Frame):
+                widget.configure(bg=self.styles.COLOR_BACKGROUND)
+
+    def _setup_menubar(self):
+        menubar = tk.Menu(
+            self.root,
+            bg=self.styles.COLOR_BACKGROUND,
+            fg=self.styles.COLOR_FOREGROUND,
+            activebackground=self.styles.COLOR_SELECTION,
+            activeforeground=self.styles.COLOR_FOREGROUND,
+            relief=tk.FLAT,
+            borderwidth=0,
+        )
+        self.root.config(menu=menubar)
+
+        # File Menu
+        filemenu = tk.Menu(menubar, tearoff=0)
+        filemenu.add_command(label="Export Session", command=self._export)
+        filemenu.add_separator(background=self.styles.COLOR_SELECTION)
+        filemenu.add_command(label="Quit", command=self.root.quit, accelerator="Ctrl+Q")
+        menubar.add_cascade(label="File", menu=filemenu)
+
+        # Edit Menu
+        editmenu = tk.Menu(menubar, tearoff=0)
+        editmenu.add_command(label="Preferences…", command=self._prefs_dialog)
+        editmenu.add_separator(background=self.styles.COLOR_SELECTION)
+        
+        # Theme submenu
+        thememenu = tk.Menu(editmenu, tearoff=0)
+        for theme_key in ThemeManager.get_theme_names():
+            theme_info = ThemeManager.get_theme_info(theme_key)
+            thememenu.add_command(
+                label=f"{theme_info['name']} - {theme_info['description']}", 
+                command=lambda t=theme_key: self._change_theme(t)
+            )
+        editmenu.add_cascade(label="Themes", menu=thememenu)
+        
+        menubar.add_cascade(label="Edit", menu=editmenu)
+
+        # Apply styles to submenus
+        for menu in (filemenu, editmenu, thememenu):
+            menu.config(
+                bg=self.styles.COLOR_BACKGROUND,
+                fg=self.styles.COLOR_FOREGROUND,
+                activebackground=self.styles.COLOR_SELECTION,
+                activeforeground=self.styles.COLOR_PINK,  # Highlight selection
+                relief=tk.FLAT,
+            )
+
+    def _change_theme(self, theme_name: str):
+        """Change the current theme and save to config."""
+        self.config.ui.theme = theme_name
+        save_config(self.config)
+        self._apply_theme(theme_name)
+        
+        theme_info = ThemeManager.get_theme_info(theme_name)
+        self._append_markdown(f"\n🎨 **Theme changed to {theme_info['name']}** — {theme_info['description']}\n", tag="info")
+
+    # ───────────────────────── Internal helpers ───────────────────────── #
+
+    def _banner(self):
+        theme_info = ThemeManager.get_theme_info(self.config.ui.theme)
+        info = (
+            f"**Provider:** {self.config.agent.provider.title()}  |  **Model:** {self.config.agent.model}\n"
+            f"**Theme:** {theme_info['name']}  |  **System:** {platform.system()} {platform.release()}\n"
+            f"**Session start:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            "Type `help` for commands or `$` to run shell commands (e.g., `$ ls -l`)."
+        )
+        self._append_markdown(info, tag="info")
+
+    def _append(self, text: Any, tag: str | None = None):
+        """Append plain text without markdown parsing."""
+        if not isinstance(text, str):
+            text = str(text)
+        self.text.configure(state=tk.NORMAL)
+        if tag:
+            tag_colors = {
+                "user": self.styles.COLOR_PINK,
+                "error": self.styles.COLOR_RED,
+                "info": self.styles.COLOR_COMMENT,
+                "spin": self.styles.COLOR_PURPLE,
+                "shell_out": self.styles.COLOR_GREEN,
+                "agent_response": self.styles.COLOR_FOREGROUND,
+            }
+            self.text.tag_configure(tag, foreground=tag_colors.get(tag, self.styles.COLOR_FOREGROUND))
+        self.text.insert(tk.END, text + "\n", tag)
+        self.text.see(tk.END)
+        self.text.configure(state=tk.DISABLED)
+
+    def _append_markdown(self, text: Any, tag: str | None = None):
+        """Append text with markdown parsing and rendering."""
+        if not isinstance(text, str):
+            text = str(text)
+        self.text.configure(state=tk.NORMAL)
+        
+        # For special tags like error, info, etc., apply the tag to the entire text
+        if tag and tag in ["user", "error", "info", "spin", "shell_out"]:
+            tag_colors = {
+                "user": self.styles.COLOR_PINK,
+                "error": self.styles.COLOR_RED,
+                "info": self.styles.COLOR_COMMENT,
+                "spin": self.styles.COLOR_PURPLE,
+                "shell_out": self.styles.COLOR_GREEN,
+            }
+            self.text.tag_configure(tag, foreground=tag_colors.get(tag, self.styles.COLOR_FOREGROUND))
+            self.text.insert(tk.END, text + "\n", tag)
         else:
-            print(error_msg)
+            # Parse and render markdown
+            self.markdown_renderer.render(text)
+        
+        self.text.see(tk.END)
+        self.text.configure(state=tk.DISABLED)
+
+    def _on_enter(self, _ev=None):
+        prompt = self.entry.get().strip()
+        if not prompt:
+            return
+        self.entry.delete(0, tk.END)
+        if prompt.startswith("$"):  # ← shell mode
+            cmd = prompt[1:].strip()
+            self._append(f"$ {cmd}", tag="user")
+            self._start_spinner("executing")
+            threading.Thread(target=self._shell_task, args=(cmd,), daemon=True).start()
+        else:  # ← AI mode
+            self._append(f"▶ {prompt}", tag="user")
+            self._start_spinner("thinking")
+            threading.Thread(target=self._agent_task, args=(prompt,), daemon=True).start()
+        return "break"
+
+    # ───────────────────────── Background Tasks ───────────────────── #
+
+    def _run_shell(self, cmd: str) -> tuple[str, str, int]:
+        try:
+            proc = subprocess.Popen(
+                shlex.split(cmd), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            )
+            out, err = proc.communicate()
+            return out, err, proc.returncode
+        except FileNotFoundError:
+            return "", f"Command not found: {cmd.split()[0]}", 127
+        except Exception as e:
+            return "", str(e), 1
+
+    def _shell_task(self, cmd: str):
+        out, err, code = self._run_shell(cmd)
+        if out:
+            self.queue.put({"shell_out": out})
+        if err:
+            self.queue.put({"shell_err": err})
+        elif code != 0 and not out:
+            self.queue.put({"shell_err": f"Command exited with code {code}"})
+
+    def _agent_task(self, prompt: str):
+        """Run the agent and enqueue a payload with the final answer and intermediate steps."""
+        if self.agent is None:
+            self.queue.put({"error": "Agent not initialised — add an API key in Preferences."})
+            return
+
+        try:
+            resp = self.agent.run(
+                prompt, show_full_reasoning=True, show_tool_calls=True
+            )
+
+            calls = []
+            for msg in resp.messages or []:
+                if getattr(msg, "tool_calls", None):
+                    for tc in msg.tool_calls:
+                        calls.append(
+                            {
+                                "tool_name": tc["function"]["name"],
+                                "tool_args": tc["function"]["arguments"],
+                                "tool_output": None,  # filled in next
+                            }
+                        )
+                elif msg.role == "tool" and calls and calls[-1]["tool_output"] is None:
+                    calls[-1]["tool_output"] = msg.content.strip()
+
+            self.queue.put(
+                {
+                    "content": str(resp.content).strip(),  # Ensure content is string
+                    "reasoning": (resp.reasoning_content or "").strip(),
+                    "calls": calls,
+                }
+            )
+        except Exception as e:
+            self.queue.put({"error": f"An unexpected error occurred: {e}"})
+
+    # ───────────────────────── Spinner helpers ────────────────────── #
+    def _start_spinner(self, label: str = "thinking"):
+        if self._spinner_job:
+            return
+
+        self.text.configure(state=tk.NORMAL)
+        # Add a newline if text area isn't empty, for spacing
+        if self.text.get("1.0", tk.END).strip():
+            self.text.insert(tk.END, "\n")
+        self._spinner_mark = self.text.index(f"{tk.END}-2c")  # remember position
+        self.text.insert(tk.END, f"{self._spinner_frames[0]} {label}...\n", "spin")
+        self.text.tag_configure("spin", foreground=self.styles.COLOR_PURPLE)
+        self.text.configure(state=tk.DISABLED)
+        self._spinner_job = self.root.after(100, self._spin_tick)
+
+    def _spin_tick(self):
+        self._spinner_index = (self._spinner_index + 1) % len(self._spinner_frames)
+        frame = self._spinner_frames[self._spinner_index]
+        self.text.configure(state=tk.NORMAL)
+        self.text.delete(self._spinner_mark, f"{self._spinner_mark}+1c")
+        self.text.insert(self._spinner_mark, frame, "spin")
+        self.text.see(tk.END)
+        self.text.configure(state=tk.DISABLED)
+        self._spinner_job = self.root.after(100, self._spin_tick)
+
+    def _stop_spinner(self):
+        if self._spinner_job:
+            self.root.after_cancel(self._spinner_job)
+            self._spinner_job = None
+            self.text.configure(state=tk.NORMAL)
+            # Find the start of the spinner line and delete the whole line
+            start_of_line = self.text.search(self._spinner_frames[0], self._spinner_mark, backwards=True)
+            if start_of_line:
+                self.text.delete(f"{start_of_line} linestart", f"{start_of_line} lineend+1c")
+            self.text.configure(state=tk.DISABLED)
+
+    # ───────────────────────── UI Event Handlers ────────────────────── #
+
+    def _show_thinking(self, data: dict):
+        """Pop-up window displaying reasoning + tool calls."""
+        top = tk.Toplevel(self.root)
+        top.title("AI Thinking")
+        top.geometry("700x500")
+        top.configure(bg=self.styles.COLOR_BACKGROUND)
+
+        txt = scrolledtext.ScrolledText(
+            top,
+            wrap=tk.WORD,
+            font=self.styles.FONT_NORMAL,
+            bg=self.styles.COLOR_BACKGROUND,
+            fg=self.styles.COLOR_FOREGROUND,
+            selectbackground=self.styles.COLOR_SELECTION,
+            borderwidth=0,
+            highlightthickness=0,
+            padx=10,
+            pady=10,
+        )
+        txt.pack(fill=tk.BOTH, expand=True)
+        txt.configure(state=tk.NORMAL)
+
+        # Create markdown renderer for thinking window
+        thinking_renderer = MarkdownRenderer(txt, self.styles)
+
+        # Chain-of-thought
+        if data["reasoning"]:
+            thinking_renderer.render("# 🧠 Reasoning\n\n" + data["reasoning"].strip() + "\n\n")
+
+        # Tool calls with syntax highlighting
+        if data["calls"]:
+            thinking_renderer.render("# 🔧 Tool Calls\n\n")
+            for i, call in enumerate(data["calls"], 1):
+                tool_info = f"{i}. **{call['tool_name']}**`({call['tool_args']})`"
+                if call["tool_output"]:
+                    output_short = (call["tool_output"][:100] + '...') if len(call["tool_output"]) > 100 else call["tool_output"]
+                    tool_info += f"\n   → `{output_short}`"
+                thinking_renderer.render(tool_info + "\n\n")
+
+        if not data["reasoning"] and not data["calls"]:
+            thinking_renderer.render("*(The model did not expose any intermediate steps.)*")
+
+        txt.configure(state=tk.DISABLED)
+
+    def _poll_queue(self):
+        try:
+            while True:
+                item = self.queue.get_nowait()
+                self._stop_spinner()
+
+                if "error" in item:
+                    self._append(f"Error: {item['error']}", tag="error")
+                elif "shell_out" in item:
+                    self._append(item["shell_out"].rstrip(), tag="shell_out")
+                elif "shell_err" in item:
+                    self._append(item["shell_err"].rstrip(), tag="error")
+                elif "content" in item:
+                    # Use markdown rendering for agent responses
+
+                    self._append_markdown(item["content"])
+                    self.text.configure(state=tk.NORMAL)
+
+                    # Create a clickable label instead of a button
+                    link = tk.Label(
+                        self.text,
+                        text="Show Thinking",
+                        font=self.styles.FONT_SMALL_LINK,
+                        fg=self.styles.COLOR_PURPLE,
+                        bg=self.styles.COLOR_BACKGROUND,
+                        cursor="hand2",
+                    )
+                    link.bind("<Button-1>", lambda e, data=item: self._show_thinking(data))
+                    link.bind("<Enter>", lambda e: e.widget.config(fg=self.styles.COLOR_PINK))
+                    link.bind("<Leave>", lambda e: e.widget.config(fg=self.styles.COLOR_PURPLE))
+
+                    self.text.insert(tk.END, "  ")
+                    self.text.window_create(tk.END, window=link)
+                    self.text.insert(tk.END, "\n\n")  # More space after response
+                    self.text.configure(state=tk.DISABLED)
+                else:
+                    self._append(str(item))  # Fallback
+
+                self.queue.task_done()
+        except queue.Empty:
+            pass
+        finally:
+            self.root.after(100, self._poll_queue)
+
+    def _prefs_dialog(self):
+        win = tk.Toplevel(self.root)
+        win.title("Preferences")
+        win.transient(self.root)
+        win.grab_set()
+        win.configure(bg=self.styles.COLOR_BACKGROUND, padx=20, pady=15)
+        win.resizable(False, False)
+
+        # --- Styles for widgets ---
+        label_style = {"bg": self.styles.COLOR_BACKGROUND, "fg": self.styles.COLOR_FOREGROUND, "font": self.styles.FONT_NORMAL}
+        entry_style = {
+            "bg": self.styles.COLOR_SELECTION, "fg": self.styles.COLOR_FOREGROUND, "font": self.styles.FONT_NORMAL,
+            "relief": tk.FLAT, "highlightthickness": 0, "insertbackground": self.styles.COLOR_FOREGROUND,
+        }
+
+        # --- Provider ---
+        tk.Label(win, text="Provider", **label_style).grid(row=0, column=0, sticky="w", pady=(0, 5))
+        provider_var = tk.StringVar(value=self.config.agent.provider)
+        provider_menu = tk.OptionMenu(win, provider_var, "openai", "google", "openrouter", "together")
+        provider_menu.config(
+            bg=self.styles.COLOR_SELECTION, fg=self.styles.COLOR_FOREGROUND, activebackground=self.styles.COLOR_SELECTION,
+            activeforeground=self.styles.COLOR_FOREGROUND, relief=tk.FLAT, highlightthickness=0, width=25,
+            direction="below", borderwidth=0,
+        )
+        provider_menu["menu"].config(
+            bg=self.styles.COLOR_BACKGROUND, fg=self.styles.COLOR_FOREGROUND,
+            activebackground=self.styles.COLOR_SELECTION, activeforeground=self.styles.COLOR_PINK, relief=tk.FLAT,
+        )
+        provider_menu.grid(row=0, column=1, sticky="ew", pady=(0, 10))
+
+        # --- Model ---
+        tk.Label(win, text="Model", **label_style).grid(row=1, column=0, sticky="w", pady=(0, 5))
+        model_var = tk.StringVar(value=self.config.agent.model)
+        tk.Entry(win, textvariable=model_var, width=30, **entry_style).grid(row=1, column=1, pady=(0, 10))
+
+        # --- API Key ---
+        tk.Label(win, text="API Key", **label_style).grid(row=2, column=0, sticky="w", pady=(0, 5))
+        key_var = tk.StringVar()
+        tk.Entry(win, textvariable=key_var, show="•", width=30, **entry_style).grid(row=2, column=1, pady=(0, 10))
+
+        # --- Theme Selection ---
+        tk.Label(win, text="Theme", **label_style).grid(row=3, column=0, sticky="w", pady=(0, 5))
+        theme_var = tk.StringVar(value=self.config.ui.theme)
+        
+        # Create theme dropdown with descriptive names
+        theme_options = []
+        theme_mapping = {}
+        for theme_key in ThemeManager.get_theme_names():
+            theme_info = ThemeManager.get_theme_info(theme_key)
+            display_name = f"{theme_info['name']}"
+            theme_options.append(display_name)
+            theme_mapping[display_name] = theme_key
+        
+        current_theme_info = ThemeManager.get_theme_info(self.config.ui.theme)
+        current_display_name = current_theme_info['name']
+        theme_var.set(current_display_name)
+        
+        theme_menu = tk.OptionMenu(win, theme_var, *theme_options)
+        theme_menu.config(
+            bg=self.styles.COLOR_SELECTION, fg=self.styles.COLOR_FOREGROUND, 
+            activebackground=self.styles.COLOR_SELECTION, activeforeground=self.styles.COLOR_FOREGROUND, 
+            relief=tk.FLAT, highlightthickness=0, width=25, direction="below", borderwidth=0,
+        )
+        theme_menu["menu"].config(
+            bg=self.styles.COLOR_BACKGROUND, fg=self.styles.COLOR_FOREGROUND,
+            activebackground=self.styles.COLOR_SELECTION, activeforeground=self.styles.COLOR_PINK, relief=tk.FLAT,
+        )
+        theme_menu.grid(row=3, column=1, sticky="ew", pady=(0, 15))
+
+        def _save():
+            cfg = self.config
+            cfg.agent.provider = provider_var.get()
+            cfg.agent.model = model_var.get()
+            key = key_var.get().strip()
+            if key:
+                setattr(cfg.agent, f"{provider_var.get()}_api_key", key)
+            
+            # Handle theme change
+            selected_theme_display = theme_var.get()
+            selected_theme_key = theme_mapping.get(selected_theme_display, "dracula")
+            if cfg.ui.theme != selected_theme_key:
+                cfg.ui.theme = selected_theme_key
+                self._apply_theme(selected_theme_key)
+            
+            save_config(cfg)
+            self.agent = build_agent(cfg)  # hot-swap
+            self._append_markdown("\n— **Preferences updated & agent restarted** —\n", tag="info")
+            win.destroy()
+
+        # --- Save Button ---
+        save_button = tk.Button(
+            win, text="Save & Restart Agent", command=_save, relief=tk.FLAT,
+            bg=self.styles.COLOR_PURPLE, fg=self.styles.COLOR_FOREGROUND,
+            activebackground=self.styles.COLOR_PINK, activeforeground=self.styles.COLOR_FOREGROUND,
+            font=self.styles.FONT_NORMAL, padx=10, pady=5, borderwidth=0,
+        )
+        save_button.grid(row=4, column=0, columnspan=2, pady=8)
+        win.columnconfigure(1, weight=1)
+
+    def _export(self):
+        path = filedialog.asksaveasfilename(
+            defaultextension=".txt", filetypes=[("Text", "*.txt"), ("All files", "*.*")]
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self.text.get("1.0", tk.END))
+            messagebox.showinfo("Export Successful", f"Session saved to {os.path.basename(path)}")
+        except Exception as e:
+            messagebox.showerror("Export Failed", f"Could not save file:\n{e}")
+
+    def run(self):
+        self.root.mainloop()
+
+
+# ───────────────────────── Agent factory ─────────────────────────── #
+
+def build_agent(cfg, allow_missing_key: bool = False) -> Agent | None:
+    provider = cfg.agent.provider.lower()
+    model_id = cfg.agent.model
+    temp = cfg.agent.temperature
+    max_tok = cfg.agent.max_tokens
+
+    def missing(msg: str):
+        if allow_missing_key:
+            return None
+        messagebox.showerror("Configuration Error", msg)
         sys.exit(1)
 
+    model_map = {
+        "openai": (OpenAIChat, cfg.agent.openai_api_key or os.getenv("OPENAI_API_KEY")),
+        "google": (Gemini, cfg.agent.google_api_key or os.getenv("GOOGLE_API_KEY")),
+        "openrouter": (OpenRouter, getattr(cfg.agent, "openrouter_api_key", None) or os.getenv("OPENROUTER_API_KEY")),
+        "together": (Together, getattr(cfg.agent, "together_api_key", None) or os.getenv("TOGETHER_API_KEY")),
+    }
+
+    if provider not in model_map:
+        missing(f"Unknown provider: {provider}")
+
+    model_class, key = model_map[provider]
+    if not key:
+        return missing(f"{provider.title()} API key missing.")
+
+    model_kwargs = {"id": model_id, "api_key": key, "temperature": temp}
+    if provider in ("openai", "openrouter", "together"):
+        model_kwargs["max_tokens"] = max_tok
+
+    model = model_class(**model_kwargs)
+
+    return Agent(
+        model=model,
+        tools=[ReasoningTools(add_instructions=True), ShellTools(), FileTools(), PythonTools()],
+        instructions=dedent(
+            f"""
+            You are a System‑Intelligence Assistant running inside a GUI terminal.
+            System: {platform.system()} {platform.release()} | Provider: {provider} | Model: {model_id}
+            - Be concise, helpful, and use markdown for formatting.
+            - You can execute shell commands. For risky commands (e.g., rm, sudo), always ask for confirmation first.
+            """
+        ),
+        add_datetime_to_instructions=True,
+        stream_intermediate_steps=True,
+        show_tool_calls=True,
+        markdown=True,
+        storage=SqliteStorage(table_name="gui_sessions", db_file=cfg.storage.db_file),
+        add_history_to_messages=True,
+        num_history_runs=3,
+    )
+
+
 if __name__ == "__main__":
-    main()
+    config = load_config()
+    os.makedirs("logs", exist_ok=True)
+    os.makedirs("exports", exist_ok=True)
+
+    # allow_missing_key=True so the app can boot to show the preferences dialog
+    agent = build_agent(config, allow_missing_key=True)
+    NeuralTerminalGUI(agent).run()
