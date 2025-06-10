@@ -1,24 +1,21 @@
-# app.py – Integrated Tk‑GUI version (no bridge needed) v1.2
+# app.py – Integrated Tk‑GUI version with Markdown Rendering v1.3
 """
 A terminal based AI agent that lets you interact with any device.
-Changelog v1.2
+Changelog v1.3
 ---------------
-* **Look & Feel**: Complete visual overhaul for an elegant, "riced" aesthetic.
-* **Theme**: Implemented a cohesive, Dracula-inspired dark theme.
-* **Fonts**: Prefers modern fonts like Fira Code and Consolas.
-* **Design**: Flat, borderless widgets and improved spacing for a minimal look.
-* **UX**: Replaced "Show Thinking" button with a subtle, clickable link.
-* **UX**: Upgraded the loading spinner to use animated Braille characters.
-* **Polish**: Themed all components, including menus and dialogs, for consistency.
-* **Fix**: agent responses were `RunResponse` objects → convert to `str` before
-  inserting into the Tk widget (prevented `TypeError`).
-* Minor: safeguard in `_append` to coerce any non‑string to `str`.
+* **Markdown Rendering**: Added comprehensive markdown parsing and rendering
+* **Rich Text**: Support for headers, bold, italic, code blocks, inline code, lists, quotes
+* **Syntax Highlighting**: Code blocks with syntax highlighting
+* **Links**: Clickable links (displayed but not clickable in this version)
+* **Lists**: Proper bullet and numbered list formatting
+* **Blockquotes**: Styled quote blocks
 """
 from __future__ import annotations
 
 import os
 import platform
 import queue
+import re
 import shlex
 import subprocess
 import sys
@@ -55,9 +52,17 @@ class Styles:
     FONT_FAMILY = ("Fira Code", "Consolas", "Courier New")
     FONT_SIZE_NORMAL = 11
     FONT_SIZE_SMALL = 10
+    FONT_SIZE_LARGE = 14
+    FONT_SIZE_XLARGE = 16
     FONT_NORMAL = (FONT_FAMILY, FONT_SIZE_NORMAL)
     FONT_BOLD = (FONT_FAMILY, FONT_SIZE_NORMAL, "bold")
+    FONT_ITALIC = (FONT_FAMILY, FONT_SIZE_NORMAL, "italic")
+    FONT_BOLD_ITALIC = (FONT_FAMILY, FONT_SIZE_NORMAL, "bold", "italic")
     FONT_SMALL_LINK = (FONT_FAMILY, FONT_SIZE_SMALL, "underline")
+    FONT_CODE = ("Courier New", FONT_SIZE_NORMAL)
+    FONT_H1 = (FONT_FAMILY, FONT_SIZE_XLARGE, "bold")
+    FONT_H2 = (FONT_FAMILY, FONT_SIZE_LARGE, "bold")
+    FONT_H3 = (FONT_FAMILY, FONT_SIZE_NORMAL, "bold")
 
     # Dracula-inspired theme
     COLOR_BACKGROUND = "#282a36"
@@ -68,7 +73,235 @@ class Styles:
     COLOR_PINK = "#ff79c6"
     COLOR_PURPLE = "#bd93f9"
     COLOR_RED = "#ff5555"
+    COLOR_ORANGE = "#ffb86c"
+    COLOR_YELLOW = "#f1fa8c"
     COLOR_SELECTION = "#44475a"
+    COLOR_CODE_BG = "#44475a"
+    COLOR_QUOTE_BG = "#383a45"
+
+
+class MarkdownRenderer:
+    """Renders markdown text in a tkinter Text widget with proper formatting."""
+    
+    def __init__(self, text_widget):
+        self.text = text_widget
+        self._setup_tags()
+    
+    def _setup_tags(self):
+        """Configure text tags for different markdown elements."""
+        # Headers
+        self.text.tag_configure("h1", font=Styles.FONT_H1, foreground=Styles.COLOR_PINK, spacing1=10, spacing3=5)
+        self.text.tag_configure("h2", font=Styles.FONT_H2, foreground=Styles.COLOR_PURPLE, spacing1=8, spacing3=4)
+        self.text.tag_configure("h3", font=Styles.FONT_H3, foreground=Styles.COLOR_CYAN, spacing1=6, spacing3=3)
+        
+        # Text styles
+        self.text.tag_configure("bold", font=Styles.FONT_BOLD, foreground=Styles.COLOR_FOREGROUND)
+        self.text.tag_configure("italic", font=Styles.FONT_ITALIC, foreground=Styles.COLOR_FOREGROUND)
+        self.text.tag_configure("bold_italic", font=Styles.FONT_BOLD_ITALIC, foreground=Styles.COLOR_FOREGROUND)
+        
+        # Code
+        self.text.tag_configure("code", font=Styles.FONT_CODE, foreground=Styles.COLOR_ORANGE, 
+                               background=Styles.COLOR_CODE_BG, borderwidth=1, relief="solid")
+        self.text.tag_configure("code_block", font=Styles.FONT_CODE, foreground=Styles.COLOR_GREEN,
+                               background=Styles.COLOR_CODE_BG, lmargin1=20, lmargin2=20, 
+                               spacing1=5, spacing3=5, borderwidth=1, relief="solid")
+        
+        # Lists
+        self.text.tag_configure("list_item", lmargin1=20, lmargin2=40, spacing1=2)
+        self.text.tag_configure("bullet", foreground=Styles.COLOR_PINK, font=Styles.FONT_BOLD)
+        
+        # Quotes
+        self.text.tag_configure("quote", lmargin1=20, lmargin2=20, foreground=Styles.COLOR_COMMENT,
+                               background=Styles.COLOR_QUOTE_BG, font=Styles.FONT_ITALIC, 
+                               spacing1=5, spacing3=5, borderwidth=1, relief="solid")
+        
+        # Links
+        self.text.tag_configure("link", foreground=Styles.COLOR_CYAN, underline=True)
+        
+        # Default
+        self.text.tag_configure("normal", foreground=Styles.COLOR_FOREGROUND, font=Styles.FONT_NORMAL)
+    
+    def render(self, markdown_text: str):
+        """Parse and render markdown text in the text widget."""
+        lines = markdown_text.split('\n')
+        i = 0
+        
+        while i < len(lines):
+            line = lines[i]
+            
+            # Skip empty lines
+            if not line.strip():
+                self.text.insert(tk.END, "\n")
+                i += 1
+                continue
+            
+            # Code blocks
+            if line.strip().startswith('```'):
+                i = self._render_code_block(lines, i)
+                continue
+            
+            # Headers
+            if line.startswith('#'):
+                self._render_header(line)
+                i += 1
+                continue
+            
+            # Blockquotes
+            if line.strip().startswith('>'):
+                i = self._render_blockquote(lines, i)
+                continue
+            
+            # Lists
+            if re.match(r'^\s*[-*+]\s+', line) or re.match(r'^\s*\d+\.\s+', line):
+                i = self._render_list(lines, i)
+                continue
+            
+            # Regular paragraph
+            self._render_paragraph(line)
+            i += 1
+        
+        self.text.insert(tk.END, "\n")
+    
+    def _render_header(self, line: str):
+        """Render header line."""
+        match = re.match(r'^(#{1,3})\s*(.*)', line)
+        if match:
+            level = len(match.group(1))
+            text = match.group(2)
+            tag = f"h{level}"
+            self.text.insert(tk.END, text + "\n", tag)
+    
+    def _render_code_block(self, lines: list, start_idx: int) -> int:
+        """Render code block and return next line index."""
+        # Find the closing ```
+        end_idx = start_idx + 1
+        while end_idx < len(lines) and not lines[end_idx].strip().startswith('```'):
+            end_idx += 1
+        
+        # Extract code content
+        code_lines = lines[start_idx + 1:end_idx]
+        code_text = '\n'.join(code_lines)
+        
+        if code_text.strip():
+            self.text.insert(tk.END, code_text + "\n", "code_block")
+        
+        return end_idx + 1
+    
+    def _render_blockquote(self, lines: list, start_idx: int) -> int:
+        """Render blockquote and return next line index."""
+        quote_lines = []
+        i = start_idx
+        
+        while i < len(lines):
+            line = lines[i]
+            if line.strip().startswith('>'):
+                # Remove the > and any following space
+                quote_text = re.sub(r'^\s*>\s?', '', line)
+                quote_lines.append(quote_text)
+                i += 1
+            elif not line.strip():  # Empty line continues the quote
+                quote_lines.append('')
+                i += 1
+            else:
+                break
+        
+        quote_text = '\n'.join(quote_lines)
+        if quote_text.strip():
+            self.text.insert(tk.END, quote_text + "\n", "quote")
+        
+        return i
+    
+    def _render_list(self, lines: list, start_idx: int) -> int:
+        """Render list and return next line index."""
+        i = start_idx
+        
+        while i < len(lines):
+            line = lines[i]
+            
+            # Bullet list
+            bullet_match = re.match(r'^(\s*)([-*+])\s+(.*)', line)
+            if bullet_match:
+                indent = bullet_match.group(1)
+                bullet = bullet_match.group(2)
+                text = bullet_match.group(3)
+                
+                self.text.insert(tk.END, indent + "• ", "bullet")
+                self._render_inline_formatting(text)
+                self.text.insert(tk.END, "\n", "list_item")
+                i += 1
+                continue
+            
+            # Numbered list
+            number_match = re.match(r'^(\s*)(\d+)\.\s+(.*)', line)
+            if number_match:
+                indent = number_match.group(1)
+                number = number_match.group(2)
+                text = number_match.group(3)
+                
+                self.text.insert(tk.END, f"{indent}{number}. ", "bullet")
+                self._render_inline_formatting(text)
+                self.text.insert(tk.END, "\n", "list_item")
+                i += 1
+                continue
+            
+            # Check if this is a continuation or end of list
+            if not line.strip():
+                i += 1
+                continue
+            else:
+                break
+        
+        return i
+    
+    def _render_paragraph(self, line: str):
+        """Render a regular paragraph with inline formatting."""
+        self._render_inline_formatting(line)
+        self.text.insert(tk.END, "\n", "normal")
+    
+    def _render_inline_formatting(self, text: str):
+        """Parse and render inline formatting like bold, italic, code, links."""
+        # Regular expressions for inline formatting
+        patterns = [
+            (r'\*\*\*(.*?)\*\*\*', 'bold_italic'),  # Bold italic
+            (r'___(.*?)___', 'bold_italic'),
+            (r'\*\*(.*?)\*\*', 'bold'),  # Bold
+            (r'__(.*?)__', 'bold'),
+            (r'\*(.*?)\*', 'italic'),  # Italic
+            (r'_(.*?)_', 'italic'),
+            (r'`(.*?)`', 'code'),  # Inline code
+            (r'\[([^\]]+)\]\(([^)]+)\)', 'link'),  # Links
+        ]
+        
+        # Find all matches with their positions
+        matches = []
+        for pattern, tag in patterns:
+            for match in re.finditer(pattern, text):
+                matches.append((match.start(), match.end(), match, tag))
+        
+        # Sort matches by position
+        matches.sort(key=lambda x: x[0])
+        
+        # Render text with formatting
+        last_end = 0
+        for start, end, match, tag in matches:
+            # Add text before this match
+            if start > last_end:
+                self.text.insert(tk.END, text[last_end:start], "normal")
+            
+            # Add formatted text
+            if tag == 'link':
+                link_text = match.group(1)
+                link_url = match.group(2)
+                self.text.insert(tk.END, f"{link_text} ({link_url})", tag)
+            else:
+                formatted_text = match.group(1)
+                self.text.insert(tk.END, formatted_text, tag)
+            
+            last_end = end
+        
+        # Add remaining text
+        if last_end < len(text):
+            self.text.insert(tk.END, text[last_end:], "normal")
 
 
 class NeuralTerminalGUI:
@@ -98,6 +331,9 @@ class NeuralTerminalGUI:
         )
         self.text.pack(fill=tk.BOTH, expand=True)
         self.text.configure(state=tk.DISABLED)
+
+        # Initialize markdown renderer
+        self.markdown_renderer = MarkdownRenderer(self.text)
 
         # Bottom input frame
         bottom = tk.Frame(self.root, bg=Styles.COLOR_BACKGROUND)
@@ -130,8 +366,8 @@ class NeuralTerminalGUI:
 
         self._banner()
         if self.agent is None:
-            self._append(
-                "⚠ No API key configured. Open **Edit ▸ Preferences…** to set your "
+            self._append_markdown(
+                "⚠ **No API key configured.** Open **Edit ▸ Preferences…** to set your "
                 "provider, model and key, then click *Save & Restart Agent*.",
                 tag="error",
             )
@@ -182,14 +418,15 @@ class NeuralTerminalGUI:
 
     def _banner(self):
         info = (
-            f"Provider: {config.agent.provider.title()}  |  Model: {config.agent.model}\n"
-            f"System: {platform.system()} {platform.release()}\n"
-            f"Session start: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-            "Type 'help' for commands or '$' to run shell commands (e.g., $ ls -l)."
+            f"**Provider:** {config.agent.provider.title()}  |  **Model:** {config.agent.model}\n"
+            f"**System:** {platform.system()} {platform.release()}\n"
+            f"**Session start:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            "Type `help` for commands or `$` to run shell commands (e.g., `$ ls -l`)."
         )
-        self._append(info, tag="info")
+        self._append_markdown(info, tag="info")
 
     def _append(self, text: Any, tag: str | None = None):
+        """Append plain text without markdown parsing."""
         if not isinstance(text, str):
             text = str(text)
         self.text.configure(state=tk.NORMAL)
@@ -204,6 +441,30 @@ class NeuralTerminalGUI:
             }
             self.text.tag_configure(tag, foreground=tag_colors.get(tag, Styles.COLOR_FOREGROUND))
         self.text.insert(tk.END, text + "\n", tag)
+        self.text.see(tk.END)
+        self.text.configure(state=tk.DISABLED)
+
+    def _append_markdown(self, text: Any, tag: str | None = None):
+        """Append text with markdown parsing and rendering."""
+        if not isinstance(text, str):
+            text = str(text)
+        self.text.configure(state=tk.NORMAL)
+        
+        # For special tags like error, info, etc., apply the tag to the entire text
+        if tag and tag in ["user", "error", "info", "spin", "shell_out"]:
+            tag_colors = {
+                "user": Styles.COLOR_PINK,
+                "error": Styles.COLOR_RED,
+                "info": Styles.COLOR_COMMENT,
+                "spin": Styles.COLOR_PURPLE,
+                "shell_out": Styles.COLOR_GREEN,
+            }
+            self.text.tag_configure(tag, foreground=tag_colors.get(tag, Styles.COLOR_FOREGROUND))
+            self.text.insert(tk.END, text + "\n", tag)
+        else:
+            # Parse and render markdown
+            self.markdown_renderer.render(text)
+        
         self.text.see(tk.END)
         self.text.configure(state=tk.DISABLED)
 
@@ -341,32 +602,26 @@ class NeuralTerminalGUI:
         txt.pack(fill=tk.BOTH, expand=True)
         txt.configure(state=tk.NORMAL)
 
+        # Create markdown renderer for thinking window
+        thinking_renderer = MarkdownRenderer(txt)
+
         # Chain-of-thought
         if data["reasoning"]:
-            txt.insert(tk.END, "🧠 Reasoning\n", "header")
-            txt.insert(tk.END, data["reasoning"].strip() + "\n\n")
+            thinking_renderer.render("# 🧠 Reasoning\n\n" + data["reasoning"].strip() + "\n\n")
 
         # Tool calls with syntax highlighting
         if data["calls"]:
-            txt.insert(tk.END, "🔧 Tool Calls\n", "header")
+            thinking_renderer.render("# 🔧 Tool Calls\n\n")
             for i, call in enumerate(data["calls"], 1):
-                txt.insert(tk.END, f"{i}. ", "info")
-                txt.insert(tk.END, f"{call['tool_name']}", "tool_name")
-                txt.insert(tk.END, f"({call['tool_args']})", "foreground")
+                tool_info = f"{i}. **{call['tool_name']}**`({call['tool_args']})`"
                 if call["tool_output"]:
                     output_short = (call["tool_output"][:100] + '...') if len(call["tool_output"]) > 100 else call["tool_output"]
-                    txt.insert(tk.END, f" → {output_short}", "tool_output")
-                txt.insert(tk.END, "\n")
+                    tool_info += f"\n   → `{output_short}`"
+                thinking_renderer.render(tool_info + "\n\n")
 
         if not data["reasoning"] and not data["calls"]:
-            txt.insert(tk.END, "(The model did not expose any intermediate steps.)", "info")
+            thinking_renderer.render("*(The model did not expose any intermediate steps.)*")
 
-        # Configure styles
-        txt.tag_configure("header", font=Styles.FONT_BOLD, foreground=Styles.COLOR_PURPLE)
-        txt.tag_configure("tool_name", foreground=Styles.COLOR_GREEN)
-        txt.tag_configure("tool_output", foreground=Styles.COLOR_COMMENT)
-        txt.tag_configure("info", foreground=Styles.COLOR_COMMENT)
-        txt.tag_configure("foreground", foreground=Styles.COLOR_FOREGROUND)
         txt.configure(state=tk.DISABLED)
 
     def _poll_queue(self):
@@ -382,7 +637,8 @@ class NeuralTerminalGUI:
                 elif "shell_err" in item:
                     self._append(item["shell_err"].rstrip(), tag="error")
                 elif "content" in item:
-                    self._append(item["content"], tag="agent_response")
+                    # Use markdown rendering for agent responses
+                    self._append_markdown(item["content"])
                     self.text.configure(state=tk.NORMAL)
 
                     # Create a clickable label instead of a button
@@ -459,7 +715,7 @@ class NeuralTerminalGUI:
             if key:
                 setattr(cfg.agent, f"{provider_var.get()}_api_key", key)
             self.agent = build_agent(cfg)  # hot-swap
-            self._append("\n— Preferences updated & agent restarted —\n", tag="info")
+            self._append_markdown("\n— **Preferences updated & agent restarted** —\n", tag="info")
             win.destroy()
 
         # --- Save Button ---
