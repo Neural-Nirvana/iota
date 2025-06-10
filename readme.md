@@ -4,7 +4,7 @@
 
 ```
 ██████████████████████████████████████████████████
-██                                              ██     We are going to build AI Operating Systems. Before AGI. Join us :)
+                                          We are going to build AI Operating Systems. Before AGI. Join us :)
 ██    ┌─────┐  ████████ ██  ██ ████████         ██
 ██    │ ◉ ◉ │    ██     ██  ██ ██               ██
 ██    │  >  │    ██     ██████ ████             ██
