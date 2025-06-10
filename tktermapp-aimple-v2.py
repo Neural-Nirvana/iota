@@ -137,6 +137,7 @@ class NeuralTerminalGUI:
             self._append(f"▶ {prompt}", tag="user")
             self._start_spinner("thinking")
             threading.Thread(target=self._agent_task, args=(prompt,), daemon=True).start()
+        return "break"
 
     # ───────────────────────── Shell helpers ───────────────────── #
     import subprocess, shlex
@@ -181,27 +182,30 @@ class NeuralTerminalGUI:
             calls = []
             last_call = None
 
+            # -------- _agent_task ----------
             for msg in resp.messages or []:
-                # assistant message that *invokes* a tool
                 if getattr(msg, "tool_calls", None):
                     for tc in msg.tool_calls:
-                        # schema is always tc["function"]["name|arguments"] in 1.5.x
-                        fn   = tc["function"]["name"]
-                        args = tc["function"]["arguments"]
-                        last_call = f"{fn}({args})"
-                        calls.append(last_call)
+                        calls.append({
+                            "tool_name"   : tc["function"]["name"],
+                            "tool_args"   : tc["function"]["arguments"],
+                            "tool_output" : None,          # filled in later
+                        })
+                elif msg.role == "tool" and calls:
+                    calls[-1]["tool_output"] = msg.content.strip()
 
-                # the tool’s own reply arrives as role=='tool'
-                elif msg.role == "tool" and last_call is not None:
-                    calls[-1] = f"{last_call} → {msg.content.strip()}"
-                    last_call = None
+            self.queue.put({
+                "content"   : resp.content.strip(),
+                "reasoning" : (resp.reasoning_content or "").strip(),
+                "calls"     : calls,
+            })
 
             # ---------- ship to the GUI ----------
-            self.queue.put({
-                "content": resp.content.strip(),
-                "reasoning": (resp.reasoning_content or "").strip(),
-                "calls": calls,                       # list[str]
-            })
+            # self.queue.put({
+            #     "content": resp.content.strip(),
+            #     "reasoning": (resp.reasoning_content or "").strip(),
+            #     "calls": calls,                       # list[str]
+            # })
 
         except Exception as e:
             self.queue.put({"error": str(e)})
@@ -260,9 +264,12 @@ class NeuralTerminalGUI:
         # Tool calls
         if data["calls"]:
             txt.insert(tk.END, "🔧 Tool calls\n", "header")
-            for idx, call in enumerate(data["calls"], 1):
-                line = f"{idx}. {call.tool_name}({call.tool_args}) → {call.tool_output}\n"
-                txt.insert(tk.END, line)
+            for i, call in enumerate(data["calls"], 1):
+                line = f"{i}. {call['tool_name']}({call['tool_args']})"
+                if call["tool_output"]:
+                    line += f" → {call['tool_output']}"
+                txt.insert(tk.END, line + "\n")
+
 
         if not data["reasoning"] and not data["calls"]:
             txt.insert(tk.END, "(The model did not expose any intermediate steps.)")
@@ -274,46 +281,42 @@ class NeuralTerminalGUI:
 
     def _poll_queue(self):
         try:
-            # first arrival from worker ⇒ stop spinner
             if self._spinner_job:
                 self._stop_spinner()
 
             while True:
                 item = self.queue.get_nowait()
 
-                # ❶ Error messages stay as before
-                if isinstance(item, dict) and item.get("error"):
+                if "error" in item:
                     self._append(item["error"], tag="error")
-                    continue
 
-                # ❷ Normal reply with metadata
-                if isinstance(item, dict):
+                elif "shell_out" in item:
+                    self._append(item["shell_out"].rstrip(), tag="info")
+
+                elif "shell_err" in item:
+                    self._append(item["shell_err"].rstrip(), tag="error")
+
+                elif "content" in item:                     # ← real answers only
                     self._append(item["content"])
-
-                    # embed a button right after the answer
                     self.text.configure(state=tk.NORMAL)
                     btn = tk.Button(
-                        self.text,
-                        text="▶ Show Thinking",
-                        relief=tk.FLAT,
-                        cursor="hand2",
-                        font=("Courier New", 10, "underline"),
+                        self.text, text="▶ Show Thinking", relief=tk.FLAT,
+                        cursor="hand2", font=("Courier New", 10, "underline"),
                         fg="#032133",
                         command=lambda data=item: self._show_thinking(data)
                     )
                     self.text.window_create(tk.END, window=btn)
-                    self.text.insert(tk.END, "\n")   # newline after button
+                    self.text.insert(tk.END, "\n")
                     self.text.configure(state=tk.DISABLED)
-                elif "shell_out" in item:
-                    self._append(item["shell_out"].rstrip(), tag="info")
-                elif "shell_err" in item:
-                    self._append(item["shell_err"].rstrip(), tag="error")
+
                 else:
-                    # fallback for any stray strings
                     self._append(str(item))
+
+                self.queue.task_done()      # ensures the item is gone
         except queue.Empty:
             pass
         self.root.after(100, self._poll_queue)
+
 
 
     # ───────────────────────── Preferences dialog ──────────────── #
