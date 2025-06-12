@@ -25,6 +25,9 @@ We are going to build AI Operating Systems. Before AGI. Join us :)
 ██████████████████████████████████████████████████
 ```
 
+[![Watch it in action](https://img.youtube.com/vi/5wEqGbwTkAk/0.jpg)](https://youtube.com/shorts/5wEqGbwTkAk)
+
+
 **Your AI-Powered System Administration Companion**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
